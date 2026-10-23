@@ -1,7 +1,7 @@
 import Foundation
 
 /// Mixes timestamp-aligned normalized sources with -6 dB fixed headroom and a -1 dBFS peak ceiling.
-struct AudioMixer {
+struct AudioMixer: Sendable {
     private var timeline: AudioTimeline
     private let headroom: Float = 0.5011872
     private let peakLimit: Float = 0.8912509

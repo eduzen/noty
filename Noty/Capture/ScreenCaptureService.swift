@@ -228,6 +228,10 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         else { throw CaptureServiceError.noMainDisplay }
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         let configuration = SCStreamConfiguration()
+        // ScreenCaptureKit still produces video for an audio-only stream.
+        configuration.width = 2
+        configuration.height = 2
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         configuration.capturesAudio = true
         configuration.captureMicrophone = true
         configuration.microphoneCaptureDeviceID = microphone.uniqueID
@@ -236,6 +240,7 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
 
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         self.stream = stream
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
         try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: outputQueue)
         try Task.checkCancellation()
@@ -258,16 +263,20 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
 
         removeLifecycleObservers()
         if let stream = state.1 {
+            try? await stream.stopCapture()
+            try? stream.removeStreamOutput(self, type: .screen)
             try? stream.removeStreamOutput(self, type: .audio)
             try? stream.removeStreamOutput(self, type: .microphone)
-            try? await stream.stopCapture()
         }
     }
 
     func stream(_: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio || type == .microphone else { return }
         do {
-            guard let packet = try Self.copyPacket(sampleBuffer, source: type == .audio ? .system : .microphone)
+            guard let packet = try CapturedAudioPacket.copying(
+                sampleBuffer,
+                source: type == .audio ? .system : .microphone
+            )
             else { return }
             let handler = withLock { stopped ? nil : packetHandler }
             handler?(packet)
@@ -352,24 +361,31 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         defer { lock.unlock() }
         return operation()
     }
+}
 
+extension CapturedAudioPacket {
     private static let maximumPacketBytes = 64 * 1024 * 1024 / 5
 
-    private static func copyPacket(_ sampleBuffer: CMSampleBuffer, source: AudioSource) throws -> CapturedAudioPacket? {
+    static func copying(_ sampleBuffer: CMSampleBuffer, source: AudioSource) throws -> CapturedAudioPacket? {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return nil }
         guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
               asbd.mFormatID == kAudioFormatLinearPCM,
-              asbd.mBitsPerChannel == 32,
-              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              asbd.mFormatFlags & kAudioFormatFlagIsBigEndian == 0,
               asbd.mSampleRate.isFinite,
               asbd.mSampleRate > 0 else { throw CaptureServiceError.invalidAudioFormat }
+        let isFloat32 = asbd.mBitsPerChannel == 32 && asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+        let isSignedInt16 = asbd.mBitsPerChannel == 16
+            && asbd.mFormatFlags & kAudioFormatFlagIsFloat == 0
+            && asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0
+        guard isFloat32 || isSignedInt16 else { throw CaptureServiceError.invalidAudioFormat }
+        let bytesPerSample = isFloat32 ? MemoryLayout<Float>.size : MemoryLayout<Int16>.size
 
         let frames = CMSampleBufferGetNumSamples(sampleBuffer)
         let channels = Int(asbd.mChannelsPerFrame)
         guard frames > 0, channels > 0, channels <= 8 else { throw CaptureServiceError.invalidAudioFormat }
         let isNonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
-        let expectedBytesPerFrame = isNonInterleaved ? MemoryLayout<Float>.size : channels * MemoryLayout<Float>.size
+        let expectedBytesPerFrame = isNonInterleaved ? bytesPerSample : channels * bytesPerSample
         guard asbd.mBytesPerFrame == UInt32(expectedBytesPerFrame) else { throw CaptureServiceError.invalidAudioFormat }
         let (sampleCount, sampleCountOverflow) = frames.multipliedReportingOverflow(by: channels)
         let (byteCount, byteCountOverflow) = sampleCount.multipliedReportingOverflow(by: MemoryLayout<Float>.size)
@@ -379,6 +395,7 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
               byteCount <= maximumPacketBytes else {
             throw CaptureServiceError.queueOverflow
         }
+        let inputByteCount = sampleCount * bytesPerSample
 
         var needed = 0
         var retainedBlock: CMBlockBuffer?
@@ -414,11 +431,11 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         )
         guard status == noErr else { throw CaptureServiceError.invalidAudioFormat }
         let buffers = UnsafeMutableAudioBufferListPointer(list)
-        let bytesPerPlane = frames.multipliedReportingOverflow(by: MemoryLayout<Float>.size)
+        let bytesPerPlane = frames.multipliedReportingOverflow(by: bytesPerSample)
         guard !bytesPerPlane.overflow else { throw CaptureServiceError.queueOverflow }
 
         if buffers.count == 1, buffers[0].mNumberChannels == UInt32(channels) {
-            guard Int(buffers[0].mDataByteSize) >= byteCount, buffers[0].mData != nil else {
+            guard Int(buffers[0].mDataByteSize) >= inputByteCount, buffers[0].mData != nil else {
                 throw CaptureServiceError.invalidAudioFormat
             }
         } else {
@@ -434,14 +451,28 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
 
         var samples = [Float]()
         samples.reserveCapacity(sampleCount)
-        if buffers.count == 1 {
-            let data = buffers[0].mData!.assumingMemoryBound(to: Float.self)
-            samples.append(contentsOf: UnsafeBufferPointer(start: data, count: sampleCount))
+        if isFloat32 {
+            if buffers.count == 1 {
+                let data = buffers[0].mData!.assumingMemoryBound(to: Float.self)
+                samples.append(contentsOf: UnsafeBufferPointer(start: data, count: sampleCount))
+            } else {
+                for frame in 0 ..< frames {
+                    for buffer in buffers {
+                        let data = buffer.mData!.assumingMemoryBound(to: Float.self)
+                        samples.append(data[frame])
+                    }
+                }
+            }
+        } else if buffers.count == 1 {
+            let data = buffers[0].mData!.assumingMemoryBound(to: Int16.self)
+            for sample in UnsafeBufferPointer(start: data, count: sampleCount) {
+                samples.append(Float(sample) / 32768)
+            }
         } else {
             for frame in 0 ..< frames {
                 for buffer in buffers {
-                    let data = buffer.mData!.assumingMemoryBound(to: Float.self)
-                    samples.append(data[frame])
+                    let data = buffer.mData!.assumingMemoryBound(to: Int16.self)
+                    samples.append(Float(data[frame]) / 32768)
                 }
             }
         }

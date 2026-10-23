@@ -26,6 +26,37 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertLessThan(samples[1], -0.15)
     }
 
+    func testConsumesStartupAudioWhileMainActorIsBusy() async throws {
+        let source = FakeCaptureService()
+        let gate = AsyncControllerGate()
+        let capture = GatedStartupCaptureService(source: source, gate: gate)
+        let appended = DispatchSemaphore(value: 0)
+        let writer = FakeRecordingWriter(onAppend: { appended.signal() })
+        let controller = makeController(capture: capture, writer: writer)
+        let starting = Task { await controller.start() }
+        await gate.waitForEntry()
+
+        // Deliberately occupy the UI actor while the audio worker must make progress.
+        let processed = await MainActor.run {
+            source.emit(packet(source: .system, time: 0, frames: 24000, left: 0.4, right: -0.4))
+            return appended.wait(timeout: .now() + 2)
+        }
+        let startupState = controller.state
+        await gate.open()
+        await starting.value
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        XCTAssertEqual(processed, .success)
+        XCTAssertEqual(startupState, .starting)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertNil(controller.latestIssue)
+        XCTAssertEqual(controller.lastArtifact?.duration ?? 0, 0.5, accuracy: 1.0 / 48000)
+        let samples = try XCTUnwrap(snapshot.chunks.first?.samples)
+        XCTAssertGreaterThan(samples[0], 0.15)
+        XCTAssertLessThan(samples[1], -0.15)
+    }
+
     func testPermissionFailureDoesNotStartCaptureOrWriter() async {
         let issue = RecordingIssue(code: "permission.microphone-denied", message: "Allow microphone access.")
         let capture = FakeCaptureService()
@@ -162,7 +193,7 @@ final class RecordingControllerTests: XCTestCase {
     private func makeController(
         permissions: FakePermissions? = nil,
         destinations: FakeDestinations? = nil,
-        capture: FakeCaptureService? = nil,
+        capture: (any CaptureService)? = nil,
         writer: FakeRecordingWriter? = nil
     ) -> RecordingController {
         let resolvedPermissions = permissions ?? FakePermissions()
@@ -240,6 +271,29 @@ private final class FakeDestinations: RecordingDestinationManaging {
     }
 }
 
+private final class GatedStartupCaptureService: CaptureService {
+    let packets: AsyncThrowingStream<CapturedAudioPacket, Error>
+    let terminations: AsyncStream<CaptureTermination>
+    private let source: FakeCaptureService
+    private let gate: AsyncControllerGate
+
+    init(source: FakeCaptureService, gate: AsyncControllerGate) {
+        self.source = source
+        self.gate = gate
+        packets = source.packets
+        terminations = source.terminations
+    }
+
+    func start() async throws {
+        try await source.start()
+        await gate.wait()
+    }
+
+    func stop() async {
+        await source.stop()
+    }
+}
+
 private actor FakeRecordingWriter: RecordingWriting {
     struct Snapshot: Sendable {
         let startCount: Int
@@ -252,6 +306,7 @@ private actor FakeRecordingWriter: RecordingWriting {
     private let artifact = RecordingArtifact(url: URL(fileURLWithPath: "/recordings/Noty-test.m4a"), duration: 0)
     private let appendIssue: RecordingIssue?
     private let failureOutcome: RecordingOutcome?
+    private let onAppend: (@Sendable () -> Void)?
     private var finishGate: AsyncControllerGate?
     private var startCount = 0
     private var appendCount = 0
@@ -260,9 +315,11 @@ private actor FakeRecordingWriter: RecordingWriting {
     private var chunks: [MixedAudioChunk] = []
     private var failureWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(appendIssue: RecordingIssue? = nil, failureOutcome: RecordingOutcome? = nil) {
+    init(appendIssue: RecordingIssue? = nil, failureOutcome: RecordingOutcome? = nil,
+         onAppend: (@Sendable () -> Void)? = nil) {
         self.appendIssue = appendIssue
         self.failureOutcome = failureOutcome
+        self.onAppend = onAppend
     }
 
     func start(at _: URL) async throws {
@@ -275,6 +332,7 @@ private actor FakeRecordingWriter: RecordingWriting {
             throw appendIssue
         }
         chunks.append(chunk)
+        onAppend?()
     }
 
     func finish() async throws -> RecordingArtifact {

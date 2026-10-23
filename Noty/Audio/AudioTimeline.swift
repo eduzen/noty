@@ -1,7 +1,7 @@
 import Foundation
 
 /// PTS-ordered accumulator. Packets may arrive up to `reorderWindow` late; later overlap is trimmed.
-struct AudioTimeline {
+struct AudioTimeline: Sendable {
     private static let maximumBufferedFrames = 5 * 48000
     private static let maximumBufferedBytes = 64 * 1024 * 1024
 

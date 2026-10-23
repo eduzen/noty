@@ -48,7 +48,7 @@ final class RecordingController: ObservableObject {
     private var writer: (any RecordingWriting)?
     private var mixer = AudioMixer()
     private var startTask: Task<Void, Never>?
-    private var captureTask: Task<Void, Never>?
+    private var captureTask: Task<AudioMixer, Never>?
     private var terminationTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
     private var finalizationTask: Task<RecordingOutcome, Never>?
@@ -202,11 +202,15 @@ final class RecordingController: ObservableObject {
 
             let capture = captureFactory()
             self.capture = capture
+            startCaptureTasks(capture, writer: writer)
             try await capture.start()
+            if let pendingFailure {
+                throw pendingFailure.issue
+            }
+            guard !stopRequested else { await cancelStartup(); return }
             state = .recording
             recordingStartUptime = ProcessInfo.processInfo.systemUptime
             startElapsedTimer()
-            startCaptureTasks(capture)
         } catch {
             if stopRequested {
                 await cancelStartup()
@@ -219,9 +223,12 @@ final class RecordingController: ObservableObject {
     private func cancelStartup() async {
         state = .stopping
         timerTask?.cancel()
+        captureTask?.cancel()
+        terminationTask?.cancel()
         if let capture {
             await capture.stop()
         }
+        _ = await captureTask?.value
         if let writer {
             _ = await writer.fail(RecordingIssue(
                 code: "recording.start-cancelled",
@@ -245,9 +252,12 @@ final class RecordingController: ObservableObject {
 
     private func failStartup(_ issue: RecordingIssue) async {
         timerTask?.cancel()
+        captureTask?.cancel()
+        terminationTask?.cancel()
         if let capture {
             await capture.stop()
         }
+        _ = await captureTask?.value
         let outcome = await writer?.fail(issue)
         if let outcome {
             apply(outcome, terminalState: terminalState(for: issue))
@@ -264,10 +274,12 @@ final class RecordingController: ObservableObject {
         terminationTask = nil
     }
 
-    private func startCaptureTasks(_ capture: CaptureService) {
-        captureTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.consumePackets(from: capture)
+    private func startCaptureTasks(_ capture: CaptureService, writer: any RecordingWriting) {
+        let packets = capture.packets
+        // UI work must not stall the bounded audio stream.
+        captureTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return AudioMixer() }
+            return await self.consumePackets(from: packets, writer: writer)
         }
         terminationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -275,26 +287,40 @@ final class RecordingController: ObservableObject {
         }
     }
 
-    private func consumePackets(from capture: CaptureService) async {
+    private nonisolated func consumePackets(
+        from packets: AsyncThrowingStream<CapturedAudioPacket, Error>,
+        writer: any RecordingWriting
+    ) async -> AudioMixer {
+        var mixer = AudioMixer()
         do {
-            for try await packet in capture.packets {
-                try await process(packet)
+            for try await packet in packets {
+                let normalized = try AudioNormalizer().normalize(packet)
+                for chunk in try mixer.append(normalized) {
+                    try await writer.append(chunk)
+                }
             }
-            if state == .recording {
-                scheduleFinalization(
-                    issue: RecordingIssue(
-                        code: "capture.ended",
-                        message: "Audio capture stopped unexpectedly.",
-                        isRetryAllowed: true
-                    ),
-                    terminalState: .interrupted
-                )
-            }
+            await captureEnded()
         } catch {
-            if state == .recording || state == .stopping {
-                let issue = issue(from: error)
-                scheduleFinalization(issue: issue, terminalState: terminalState(for: issue))
-            }
+            await captureEnded(error: error)
+        }
+        return mixer
+    }
+
+    private func captureEnded(error: Error? = nil) {
+        guard !Task.isCancelled else { return }
+        if let error {
+            guard state == .starting || state == .recording || state == .stopping else { return }
+            let issue = issue(from: error)
+            scheduleFinalization(issue: issue, terminalState: terminalState(for: issue))
+        } else if state == .starting || state == .recording {
+            scheduleFinalization(
+                issue: RecordingIssue(
+                    code: "capture.ended",
+                    message: "Audio capture stopped unexpectedly.",
+                    isRetryAllowed: true
+                ),
+                terminalState: .interrupted
+            )
         }
     }
 
@@ -314,28 +340,17 @@ final class RecordingController: ObservableObject {
                  let .queueOverflow(value):
                 issue = value
             }
-            guard state == .recording || state == .stopping else { return }
+            guard state == .starting || state == .recording || state == .stopping else { return }
             scheduleFinalization(issue: issue, terminalState: terminalState(for: issue))
             return
         }
     }
 
-    private func process(_ packet: CapturedAudioPacket) async throws {
-        let normalized = try AudioNormalizer().normalize(packet)
-        let chunks = try mixer.append(normalized)
-        guard let writer else {
-            throw RecordingIssue(
-                code: "writer.not-active",
-                message: "The recording writer is unavailable.",
-                isRetryAllowed: false
-            )
-        }
-        for chunk in chunks {
-            try await writer.append(chunk)
-        }
-    }
-
     private func scheduleFinalization(issue: RecordingIssue, terminalState: RecordingState) {
+        if state == .starting {
+            pendingFailure = pendingFailure ?? (issue, terminalState)
+            return
+        }
         pendingFailure = (issue, terminalState)
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -381,7 +396,7 @@ final class RecordingController: ObservableObject {
             await capture.stop()
         }
         if let captureTask {
-            await captureTask.value
+            mixer = await captureTask.value
         }
         terminationTask?.cancel()
         terminationTask = nil
