@@ -1,0 +1,25 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "trailing-whitespace" },
+    { id = "end-of-file-fixer" },
+    { id = "check-added-large-files" },
+    { id = "check-merge-conflict" },
+    { id = "check-case-conflict" },
+    { id = "check-symlinks" },
+    { id = "check-json" },
+    { id = "check-yaml" },
+    { id = "check-toml" },
+    { id = "detect-private-key" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "swiftformat", name = "SwiftFormat", entry = "swiftformat --lint", language = "system", types = ["swift"] },
+    { id = "swiftlint", name = "SwiftLint", entry = "swiftlint lint --quiet --strict", language = "system", types = ["swift"], pass_filenames = false },
+]

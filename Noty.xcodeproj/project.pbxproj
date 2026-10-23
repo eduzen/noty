@@ -1,0 +1,68 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000001 /* Noty */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A10000000000000000000003 /* Exceptions for Noty target */, ); path = Noty; sourceTree = "<group>"; };
+		A10000000000000000000002 /* NotyTests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = NotyTests; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A10000000000000000000003 /* Exceptions for Noty target */ = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Resources/Info.plist, Resources/Noty.entitlements, ); target = A10000000000000000000010 /* Noty */; };
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFrameworksBuildPhase section */
+A10000000000000000000020 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A10000000000000000000021 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A10000000000000000000024 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+
+/* Begin PBXGroup section */
+		A10000000000000000000030 = {isa = PBXGroup; children = (A10000000000000000000001 /* Noty */, A10000000000000000000002 /* NotyTests */, A10000000000000000000031 /* Products */, ); sourceTree = "<group>"; };
+		A10000000000000000000031 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000032 /* Noty.app */, A10000000000000000000033 /* NotyTests.xctest */, ); name = Products; sourceTree = "<group>"; };
+		A10000000000000000000032 /* Noty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Noty.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000033 /* NotyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+A10000000000000000000010 /* Noty */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000040 /* Build configuration list for PBXNativeTarget "Noty" */; buildPhases = (A10000000000000000000020 /* Sources */, A10000000000000000000021 /* Frameworks */, A10000000000000000000022 /* Resources */, ); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (A10000000000000000000001 /* Noty */, ); name = Noty; packageProductDependencies = (); productName = Noty; productReference = A10000000000000000000032 /* Noty.app */; productType = "com.apple.product-type.application"; };
+A10000000000000000000011 /* NotyTests */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000041 /* Build configuration list for PBXNativeTarget "NotyTests" */; buildPhases = (A10000000000000000000023 /* Sources */, A10000000000000000000024 /* Frameworks */, A10000000000000000000025 /* Resources */, ); buildRules = (); dependencies = (A10000000000000000000050 /* PBXTargetDependency */, ); fileSystemSynchronizedGroups = (A10000000000000000000002 /* NotyTests */, ); name = NotyTests; packageProductDependencies = (); productName = NotyTests; productReference = A10000000000000000000033 /* NotyTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000060 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 2700; TargetAttributes = {A10000000000000000000010 = {CreatedOnToolsVersion = 27.0; }; A10000000000000000000011 = {CreatedOnToolsVersion = 27.0; TestTargetID = A10000000000000000000010; }; }; }; buildConfigurationList = A10000000000000000000061 /* Build configuration list for PBXProject "Noty" */; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = A10000000000000000000030; productRefGroup = A10000000000000000000031 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000010 /* Noty */, A10000000000000000000011 /* NotyTests */, ); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A10000000000000000000025 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A10000000000000000000023 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000050 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A10000000000000000000010 /* Noty */; targetProxy = A10000000000000000000051 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000051 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A10000000000000000000060 /* Project object */; proxyType = 1; remoteGlobalIDString = A10000000000000000000010; remoteInfo = Noty; };
+/* End PBXContainerItemProxy section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000070 /* Debug project */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
+		A10000000000000000000071 /* Release project */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Release; };
+A10000000000000000000072 /* Debug app */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = Noty/Resources/Noty.entitlements; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; CURRENT_PROJECT_VERSION = 1; ENABLE_APP_SANDBOX = YES; ENABLE_TESTABILITY = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Noty/Resources/Info.plist; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.eduzen.noty; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 5.0; }; name = Debug; };
+A10000000000000000000073 /* Release app */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = Noty/Resources/Noty.entitlements; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; CURRENT_PROJECT_VERSION = 1; ENABLE_APP_SANDBOX = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Noty/Resources/Info.plist; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.eduzen.noty; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; }; name = Release; };
+A10000000000000000000074 /* Debug tests */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = com.eduzen.noty.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Noty.app/Contents/MacOS/Noty"; }; name = Debug; };
+A10000000000000000000075 /* Release tests */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_IDENTITY = "-"; CODE_SIGN_STYLE = Manual; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = com.eduzen.noty.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Noty.app/Contents/MacOS/Noty"; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000061 /* Build configuration list for PBXProject "Noty" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000070 /* Debug project */, A10000000000000000000071 /* Release project */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000040 /* Build configuration list for PBXNativeTarget "Noty" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000072 /* Debug app */, A10000000000000000000073 /* Release app */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000041 /* Build configuration list for PBXNativeTarget "NotyTests" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000074 /* Debug tests */, A10000000000000000000075 /* Release tests */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000060 /* Project object */;
+}
