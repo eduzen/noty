@@ -15,8 +15,10 @@ final class FakeCaptureService: CaptureService {
     private var failure: (index: Int, issue: RecordingIssue)?
 
     init() {
-        let (packets, packetContinuation) = AsyncThrowingStream<CapturedAudioPacket, Error>.makeStream(bufferingPolicy: .bufferingOldest(3))
-        let (terminations, terminationContinuation) = AsyncStream<CaptureTermination>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let (packets, packetContinuation) = AsyncThrowingStream<CapturedAudioPacket, Error>
+            .makeStream(bufferingPolicy: .bufferingOldest(3))
+        let (terminations, terminationContinuation) = AsyncStream<CaptureTermination>
+            .makeStream(bufferingPolicy: .bufferingNewest(1))
         self.packets = packets
         self.packetContinuation = packetContinuation
         self.terminations = terminations
@@ -46,7 +48,11 @@ final class FakeCaptureService: CaptureService {
         }
         emittedPackets += 1
         if case .dropped = packetContinuation.yield(packet) {
-            let issue = RecordingIssue(code: "capture.queue-overflow", message: "Audio capture exceeded its bounded buffer.", isRetryAllowed: false)
+            let issue = RecordingIssue(
+                code: "capture.queue-overflow",
+                message: "Audio capture exceeded its bounded buffer.",
+                isRetryAllowed: false
+            )
             terminal = true
             packetContinuation.finish(throwing: issue)
             terminationContinuation.yield(.queueOverflow(issue))

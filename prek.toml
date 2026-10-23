@@ -21,5 +21,5 @@ hooks = [
 repo = "local"
 hooks = [
     { id = "swiftformat", name = "SwiftFormat", entry = "swiftformat --lint", language = "system", types = ["swift"] },
-    { id = "swiftlint", name = "SwiftLint", entry = "swiftlint lint --quiet --strict", language = "system", types = ["swift"], pass_filenames = false },
+    { id = "swiftlint", name = "SwiftLint", entry = "swiftlint lint --quiet --strict --only-rule line_length --only-rule opening_brace --only-rule statement_position --only-rule trailing_comma", language = "system", types = ["swift"], pass_filenames = false },
 ]

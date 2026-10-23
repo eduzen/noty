@@ -1,12 +1,15 @@
-import AVFoundation
 import AppKit
+import AVFoundation
 import CoreGraphics
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
 protocol ScreenCaptureBackend: AnyObject {
-    func start(onPacket: @escaping (CapturedAudioPacket) -> Void, onTermination: @escaping (CaptureTermination) -> Void) async throws
+    func start(
+        onPacket: @escaping (CapturedAudioPacket) -> Void,
+        onTermination: @escaping (CaptureTermination) -> Void
+    ) async throws
     func stop() async
 }
 
@@ -23,8 +26,10 @@ final class ScreenCaptureService: CaptureService {
     private var startupTask: Task<Void, Error>?
     private var backendStopTask: Task<Void, Never>?
     init(backend: ScreenCaptureBackend = ScreenCaptureKitBackend()) {
-        let (packets, packetContinuation) = AsyncThrowingStream<CapturedAudioPacket, Error>.makeStream(bufferingPolicy: .bufferingOldest(3))
-        let (terminations, terminationContinuation) = AsyncStream<CaptureTermination>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let (packets, packetContinuation) = AsyncThrowingStream<CapturedAudioPacket, Error>
+            .makeStream(bufferingPolicy: .bufferingOldest(3))
+        let (terminations, terminationContinuation) = AsyncStream<CaptureTermination>
+            .makeStream(bufferingPolicy: .bufferingNewest(1))
         self.packets = packets
         self.packetContinuation = packetContinuation
         self.terminations = terminations
@@ -43,7 +48,11 @@ final class ScreenCaptureService: CaptureService {
                     switch packetContinuation.yield(packet) {
                     case .enqueued: break
                     case .dropped:
-                        terminate(with: .queueOverflow(RecordingIssue(code: "capture.queue-overflow", message: "Audio capture exceeded its bounded buffer.", isRetryAllowed: false)))
+                        terminate(with: .queueOverflow(RecordingIssue(
+                            code: "capture.queue-overflow",
+                            message: "Audio capture exceeded its bounded buffer.",
+                            isRetryAllowed: false
+                        )))
                     case .terminated: break
                     @unknown default: break
                     }
@@ -81,7 +90,9 @@ final class ScreenCaptureService: CaptureService {
         }
         state.startupTask?.cancel()
         if state.shouldStopBackend {
-            if let startupTask = state.startupTask { _ = try? await startupTask.value }
+            if let startupTask = state.startupTask {
+                _ = try? await startupTask.value
+            }
             await stopBackendOnce()
         }
         guard state.shouldFinish else { return }
@@ -92,7 +103,9 @@ final class ScreenCaptureService: CaptureService {
 
     private func stopBackendOnce() async {
         let task: Task<Void, Never> = withLock {
-            if let existingTask = backendStopTask { return existingTask }
+            if let existingTask = backendStopTask {
+                return existingTask
+            }
             let task = Task { [backend] in await backend.stop() }
             backendStopTask = task
             return task
@@ -112,7 +125,9 @@ final class ScreenCaptureService: CaptureService {
         terminationContinuation.yield(termination)
         terminationContinuation.finish()
         Task {
-            if let startupTask = state.1 { _ = try? await startupTask.value }
+            if let startupTask = state.1 {
+                _ = try? await startupTask.value
+            }
             await stopBackendOnce()
         }
     }
@@ -123,22 +138,43 @@ final class ScreenCaptureService: CaptureService {
         return operation()
     }
 
-
-
     private static func termination(for error: Error) -> CaptureTermination {
         if let captureError = error as? CaptureServiceError {
             switch captureError {
             case .screenRecordingDenied:
-                return .screenRecordingDenied(RecordingIssue(code: "capture.screen-recording-denied", message: "Screen Recording permission is required to capture audio.", recoveryURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"), isRetryAllowed: true))
+                return .screenRecordingDenied(RecordingIssue(
+                    code: "capture.screen-recording-denied",
+                    message: "Screen Recording permission is required to capture audio.",
+                    recoveryURL: URL(
+                        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+                    ),
+                    isRetryAllowed: true
+                ))
             case .microphoneUnavailable:
-                return .microphoneDisconnected(RecordingIssue(code: "capture.microphone-unavailable", message: "No default microphone is available.", isRetryAllowed: true))
-            case .streamFailure(let message):
-                return .unexpected(RecordingIssue(code: "capture.stream-failed", message: message, isRetryAllowed: true))
+                return .microphoneDisconnected(RecordingIssue(
+                    code: "capture.microphone-unavailable",
+                    message: "No default microphone is available.",
+                    isRetryAllowed: true
+                ))
+            case let .streamFailure(message):
+                return .unexpected(RecordingIssue(
+                    code: "capture.stream-failed",
+                    message: message,
+                    isRetryAllowed: true
+                ))
             case .queueOverflow:
-                return .queueOverflow(RecordingIssue(code: "capture.queue-overflow", message: "Audio capture exceeded its bounded buffer.", isRetryAllowed: false))
+                return .queueOverflow(RecordingIssue(
+                    code: "capture.queue-overflow",
+                    message: "Audio capture exceeded its bounded buffer.",
+                    isRetryAllowed: false
+                ))
             case .alreadyStarted, .notStarted, .noMainDisplay, .invalidAudioFormat:
-                return .unexpected(RecordingIssue(code: "capture.setup-failed", message: error.localizedDescription, isRetryAllowed: true))
-        }
+                return .unexpected(RecordingIssue(
+                    code: "capture.setup-failed",
+                    message: error.localizedDescription,
+                    isRetryAllowed: true
+                ))
+            }
         }
         let mapped = ScreenCaptureError.map(error)
         switch mapped.kind {
@@ -152,7 +188,9 @@ final class ScreenCaptureService: CaptureService {
     private static func error(for termination: CaptureTermination) -> Error {
         switch termination {
         case .userStopped: return CancellationError()
-        case .screenRecordingDenied(let issue), .interrupted(let issue), .microphoneDisconnected(let issue), .unexpected(let issue), .queueOverflow(let issue): return issue
+        case let .screenRecordingDenied(issue), let .interrupted(issue), let .microphoneDisconnected(issue),
+             let .unexpected(issue),
+             let .queueOverflow(issue): return issue
         }
     }
 }
@@ -169,7 +207,10 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
     private var sleepObserver: NSObjectProtocol?
     private var microphoneObserver: NSObjectProtocol?
 
-    func start(onPacket: @escaping (CapturedAudioPacket) -> Void, onTermination: @escaping (CaptureTermination) -> Void) async throws {
+    func start(
+        onPacket: @escaping (CapturedAudioPacket) -> Void,
+        onTermination: @escaping (CaptureTermination) -> Void
+    ) async throws {
         withLock {
             packetHandler = onPacket
             terminationHandler = onTermination
@@ -183,7 +224,8 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
 
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try Task.checkCancellation()
-        guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else { throw CaptureServiceError.noMainDisplay }
+        guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
+        else { throw CaptureServiceError.noMainDisplay }
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true
@@ -222,21 +264,29 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         }
     }
 
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+    func stream(_: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio || type == .microphone else { return }
         do {
-            guard let packet = try Self.copyPacket(sampleBuffer, source: type == .audio ? .system : .microphone) else { return }
+            guard let packet = try Self.copyPacket(sampleBuffer, source: type == .audio ? .system : .microphone)
+            else { return }
             let handler = withLock { stopped ? nil : packetHandler }
             handler?(packet)
         } catch CaptureServiceError.queueOverflow {
-            notify(.queueOverflow(RecordingIssue(code: "capture.queue-overflow", message: "Audio capture exceeded its bounded buffer.", isRetryAllowed: false)))
+            notify(.queueOverflow(RecordingIssue(
+                code: "capture.queue-overflow",
+                message: "Audio capture exceeded its bounded buffer.",
+                isRetryAllowed: false
+            )))
         } catch {
-            notify(.unexpected(RecordingIssue(code: "capture.invalid-audio", message: "ScreenCaptureKit returned an invalid audio buffer.", isRetryAllowed: false)))
+            notify(.unexpected(RecordingIssue(
+                code: "capture.invalid-audio",
+                message: "ScreenCaptureKit returned an invalid audio buffer.",
+                isRetryAllowed: false
+            )))
         }
     }
 
-
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
+    func stream(_: SCStream, didStopWithError error: Error) {
         let mapped = ScreenCaptureError.map(error)
         let termination: CaptureTermination
         switch mapped.kind {
@@ -248,23 +298,42 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         notify(termination)
     }
 
-
     private func installLifecycleObservers() {
         let center = NotificationCenter.default
-        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.notify(.interrupted(RecordingIssue(code: "capture.sleep", message: "Audio capture stopped because the Mac is going to sleep.", isRetryAllowed: true)))
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.notify(.interrupted(RecordingIssue(
+                code: "capture.sleep",
+                message: "Audio capture stopped because the Mac is going to sleep.",
+                isRetryAllowed: true
+            )))
         }
-        microphoneObserver = center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: nil) { [weak self] notification in
+        microphoneObserver = center.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
             guard let self,
                   let device = notification.object as? AVCaptureDevice,
                   device.uniqueID == self.microphoneID else { return }
-            self.notify(.microphoneDisconnected(RecordingIssue(code: "capture.microphone-disconnected", message: "The microphone was disconnected.", isRetryAllowed: true)))
+            self.notify(.microphoneDisconnected(RecordingIssue(
+                code: "capture.microphone-disconnected",
+                message: "The microphone was disconnected.",
+                isRetryAllowed: true
+            )))
         }
     }
 
     private func removeLifecycleObservers() {
-        if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
-        if let microphoneObserver { NotificationCenter.default.removeObserver(microphoneObserver) }
+        if let sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
+        }
+        if let microphoneObserver {
+            NotificationCenter.default.removeObserver(microphoneObserver)
+        }
         sleepObserver = nil
         microphoneObserver = nil
     }
@@ -283,6 +352,7 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         defer { lock.unlock() }
         return operation()
     }
+
     private static let maximumPacketBytes = 64 * 1024 * 1024 / 5
 
     private static func copyPacket(_ sampleBuffer: CMSampleBuffer, source: AudioSource) throws -> CapturedAudioPacket? {
@@ -303,22 +373,45 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         guard asbd.mBytesPerFrame == UInt32(expectedBytesPerFrame) else { throw CaptureServiceError.invalidAudioFormat }
         let (sampleCount, sampleCountOverflow) = frames.multipliedReportingOverflow(by: channels)
         let (byteCount, byteCountOverflow) = sampleCount.multipliedReportingOverflow(by: MemoryLayout<Float>.size)
-        let (minimumListSize, listSizeOverflow) = channels.multipliedReportingOverflow(by: MemoryLayout<AudioBuffer>.size)
-        guard !sampleCountOverflow, !byteCountOverflow, !listSizeOverflow else { throw CaptureServiceError.queueOverflow }
-        guard Double(frames) / asbd.mSampleRate <= 1.0, byteCount <= maximumPacketBytes else {
+        let (minimumListSize, listSizeOverflow) = channels
+            .multipliedReportingOverflow(by: MemoryLayout<AudioBuffer>.size)
+        guard !sampleCountOverflow, !byteCountOverflow, !listSizeOverflow, Double(frames) / asbd.mSampleRate <= 1.0,
+              byteCount <= maximumPacketBytes else {
             throw CaptureServiceError.queueOverflow
         }
 
         var needed = 0
         var retainedBlock: CMBlockBuffer?
-        var status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer, bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0, blockBufferAllocator: kCFAllocatorDefault, blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, blockBufferOut: &retainedBlock)
-        guard status == noErr, needed > 0, needed <= 4_096, needed <= minimumListSize + MemoryLayout<AudioBufferList>.size else {
+        var status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &needed,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: 0,
+            blockBufferOut: &retainedBlock
+        )
+        guard status == noErr, needed > 0, needed <= 4096,
+              needed <= minimumListSize + MemoryLayout<AudioBufferList>.size else {
             throw CaptureServiceError.invalidAudioFormat
         }
-        let storage = UnsafeMutableRawPointer.allocate(byteCount: needed, alignment: MemoryLayout<AudioBufferList>.alignment)
+        let storage = UnsafeMutableRawPointer.allocate(
+            byteCount: needed,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
         defer { storage.deallocate() }
         let list = storage.bindMemory(to: AudioBufferList.self, capacity: 1)
-        status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer, bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: needed, blockBufferAllocator: kCFAllocatorDefault, blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, blockBufferOut: &retainedBlock)
+        status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: list,
+            bufferListSize: needed,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: 0,
+            blockBufferOut: &retainedBlock
+        )
         guard status == noErr else { throw CaptureServiceError.invalidAudioFormat }
         let buffers = UnsafeMutableAudioBufferListPointer(list)
         let bytesPerPlane = frames.multipliedReportingOverflow(by: MemoryLayout<Float>.size)
@@ -330,7 +423,11 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
             }
         } else {
             guard buffers.count == channels,
-                  buffers.allSatisfy({ $0.mNumberChannels == 1 && Int($0.mDataByteSize) >= bytesPerPlane.partialValue && $0.mData != nil }) else {
+                  buffers
+                      .allSatisfy({
+                          $0.mNumberChannels == 1 && Int($0.mDataByteSize) >= bytesPerPlane.partialValue && $0
+                              .mData != nil })
+            else {
                 throw CaptureServiceError.invalidAudioFormat
             }
         }
@@ -341,7 +438,7 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
             let data = buffers[0].mData!.assumingMemoryBound(to: Float.self)
             samples.append(contentsOf: UnsafeBufferPointer(start: data, count: sampleCount))
         } else {
-            for frame in 0..<frames {
+            for frame in 0 ..< frames {
                 for buffer in buffers {
                     let data = buffer.mData!.assumingMemoryBound(to: Float.self)
                     samples.append(data[frame])
@@ -350,6 +447,13 @@ private final class ScreenCaptureKitBackend: NSObject, ScreenCaptureBackend, SCS
         }
         let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         guard time.isValid, time.isNumeric else { throw CaptureServiceError.invalidAudioFormat }
-        return CapturedAudioPacket(source: source, presentationTime: CMTimeGetSeconds(time), sampleRate: asbd.mSampleRate, channelCount: channels, frameCount: frames, samples: samples)
+        return CapturedAudioPacket(
+            source: source,
+            presentationTime: CMTimeGetSeconds(time),
+            sampleRate: asbd.mSampleRate,
+            channelCount: channels,
+            frameCount: frames,
+            samples: samples
+        )
     }
 }

@@ -22,7 +22,9 @@ struct RecordingIssue: Error, Equatable, Sendable, LocalizedError {
         self.isRetryAllowed = isRetryAllowed
     }
 
-    var errorDescription: String? { message }
+    var errorDescription: String? {
+        message
+    }
 }
 
 struct RecordingArtifact: Equatable, Sendable {

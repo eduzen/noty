@@ -1,6 +1,6 @@
 import Foundation
-import XCTest
 @testable import Noty
+import XCTest
 
 @MainActor
 final class RecordingControllerTests: XCTestCase {
@@ -11,8 +11,8 @@ final class RecordingControllerTests: XCTestCase {
 
         await controller.start()
         XCTAssertEqual(controller.state, .recording)
-        capture.emit(packet(source: .system, time: 0, frames: 4_800, left: 0.5, right: -0.5))
-        capture.emit(packet(source: .microphone, time: 0, frames: 4_800, left: 0.2, right: 0.1))
+        capture.emit(packet(source: .system, time: 0, frames: 4800, left: 0.5, right: -0.5))
+        capture.emit(packet(source: .microphone, time: 0, frames: 4800, left: 0.2, right: 0.1))
         await controller.stop()
 
         let snapshot = await writer.snapshot()
@@ -61,7 +61,11 @@ final class RecordingControllerTests: XCTestCase {
     func testCaptureFailureSurfacesValidatedRecoveryArtifact() async {
         let capture = FakeCaptureService()
         let issue = RecordingIssue(code: "capture.microphone-disconnected", message: "Microphone disconnected.")
-        let artifact = RecordingArtifact(url: URL(fileURLWithPath: "/recordings/recovery.m4a"), kind: .recovery, duration: 1)
+        let artifact = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/recovery.m4a"),
+            kind: .recovery,
+            duration: 1
+        )
         let writer = FakeRecordingWriter(failureOutcome: .partial(artifact, issue))
         let controller = makeController(capture: capture, writer: writer)
         await controller.start()
@@ -78,12 +82,16 @@ final class RecordingControllerTests: XCTestCase {
     func testWriterFailureStopsCaptureAndSurfacesRecoveryURL() async {
         let capture = FakeCaptureService()
         let issue = RecordingIssue(code: "writer.disk-full", message: "Disk is full.")
-        let artifact = RecordingArtifact(url: URL(fileURLWithPath: "/recordings/partial.m4a"), kind: .recovery, duration: 0.25)
+        let artifact = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/partial.m4a"),
+            kind: .recovery,
+            duration: 0.25
+        )
         let writer = FakeRecordingWriter(appendIssue: issue, failureOutcome: .partial(artifact, issue))
         let controller = makeController(capture: capture, writer: writer)
         await controller.start()
 
-        capture.emit(packet(source: .system, time: 0, frames: 24_000, left: 0.4, right: 0.4))
+        capture.emit(packet(source: .system, time: 0, frames: 24000, left: 0.4, right: 0.4))
         await writer.waitUntilFailure()
         await controller.stop()
 
@@ -113,7 +121,7 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(capture.startCount, 0)
     }
 
-    func testConcurrentTerminationAndStopShareFinalization() async throws {
+    func testConcurrentTerminationAndStopShareFinalization() async {
         let capture = FakeCaptureService()
         let writer = FakeRecordingWriter()
         let gate = AsyncControllerGate()
@@ -170,11 +178,12 @@ final class RecordingControllerTests: XCTestCase {
         )
     }
 
-    private func packet(source: AudioSource, time: Double, frames: Int, left: Float, right: Float) -> CapturedAudioPacket {
+    private func packet(source: AudioSource, time: Double, frames: Int, left: Float,
+                        right: Float) -> CapturedAudioPacket {
         CapturedAudioPacket(
             source: source,
             presentationTime: time,
-            sampleRate: 48_000,
+            sampleRate: 48000,
             channelCount: 2,
             frameCount: frames,
             samples: Array(repeating: [left, right], count: frames).flatMap { $0 }
@@ -202,7 +211,9 @@ private final class FakePermissions: RecordingPermissionPreparing {
             entryWaiter = nil
             await withCheckedContinuation { releaseWaiter = $0 }
         }
-        if let issue { throw issue }
+        if let issue {
+            throw issue
+        }
         return PermissionGrant(microphone: true, screenRecording: true)
     }
 
@@ -220,8 +231,13 @@ private final class FakePermissions: RecordingPermissionPreparing {
 @MainActor
 private final class FakeDestinations: RecordingDestinationManaging {
     private let folder = URL(fileURLWithPath: "/recordings", isDirectory: true)
-    func resolveCurrentDestination() throws -> DestinationLease { DestinationLease(url: folder, releaseAccess: nil) }
-    func chooseFolder() throws -> DestinationLease { DestinationLease(url: folder, releaseAccess: nil) }
+    func resolveCurrentDestination() throws -> DestinationLease {
+        DestinationLease(url: folder, releaseAccess: nil)
+    }
+
+    func chooseFolder() throws -> DestinationLease {
+        DestinationLease(url: folder, releaseAccess: nil)
+    }
 }
 
 private actor FakeRecordingWriter: RecordingWriting {
@@ -249,29 +265,39 @@ private actor FakeRecordingWriter: RecordingWriting {
         self.failureOutcome = failureOutcome
     }
 
-    func start(at destinationURL: URL) async throws { startCount += 1 }
+    func start(at _: URL) async throws {
+        startCount += 1
+    }
 
     func append(_ chunk: MixedAudioChunk) async throws {
         appendCount += 1
-        if let appendIssue { throw appendIssue }
+        if let appendIssue {
+            throw appendIssue
+        }
         chunks.append(chunk)
     }
 
     func finish() async throws -> RecordingArtifact {
         finishCount += 1
-        if let finishGate { await finishGate.wait() }
-        let duration = Double(chunks.reduce(0) { $0 + $1.frameCount }) / 48_000
+        if let finishGate {
+            await finishGate.wait()
+        }
+        let duration = Double(chunks.reduce(0) { $0 + $1.frameCount }) / 48000
         return RecordingArtifact(url: artifact.url, duration: duration)
     }
 
     func fail(_ issue: RecordingIssue) async -> RecordingOutcome {
         failCount += 1
-        for waiter in failureWaiters { waiter.resume() }
+        for waiter in failureWaiters {
+            waiter.resume()
+        }
         failureWaiters.removeAll()
         return failureOutcome ?? .failed(issue)
     }
 
-    func setFinishGate(_ gate: AsyncControllerGate) { finishGate = gate }
+    func setFinishGate(_ gate: AsyncControllerGate) {
+        finishGate = gate
+    }
 
     func waitUntilFailure() async {
         guard failCount == 0 else { return }
@@ -279,7 +305,13 @@ private actor FakeRecordingWriter: RecordingWriting {
     }
 
     func snapshot() -> Snapshot {
-        Snapshot(startCount: startCount, appendCount: appendCount, finishCount: finishCount, failCount: failCount, chunks: chunks)
+        Snapshot(
+            startCount: startCount,
+            appendCount: appendCount,
+            finishCount: finishCount,
+            failCount: failCount,
+            chunks: chunks
+        )
     }
 }
 

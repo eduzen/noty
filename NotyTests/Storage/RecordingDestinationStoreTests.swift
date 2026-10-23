@@ -1,6 +1,6 @@
 import Foundation
-import XCTest
 @testable import Noty
+import XCTest
 
 final class RecordingDestinationStoreTests: XCTestCase {
     func testFirstUseCreatesAndLeasesDefaultMusicFolder() throws {
@@ -20,7 +20,11 @@ final class RecordingDestinationStoreTests: XCTestCase {
         fs.unwritable.insert(URL(fileURLWithPath: "/saved", isDirectory: true))
         let bookmarks = FakeBookmarkProvider()
         bookmarks.register(Data("saved".utf8), url: URL(fileURLWithPath: "/saved", isDirectory: true))
-        let store = makeStore(fileSystem: fs, bookmarks: bookmarks, bookmarkStore: FakeBookmarkStore(data: Data("saved".utf8)))
+        let store = makeStore(
+            fileSystem: fs,
+            bookmarks: bookmarks,
+            bookmarkStore: FakeBookmarkStore(data: Data("saved".utf8))
+        )
 
         XCTAssertThrowsError(try store.resolveCurrentDestination()) { error in
             guard let issue = error as? RecordingIssue else { return XCTFail("Expected RecordingIssue") }
@@ -34,7 +38,11 @@ final class RecordingDestinationStoreTests: XCTestCase {
         let fs = FakeDestinationFileSystem()
         let provider = FakeBookmarkProvider()
         provider.register(Data("old".utf8), url: URL(fileURLWithPath: "/moved", isDirectory: true), stale: true)
-        let store = makeStore(fileSystem: fs, bookmarks: provider, bookmarkStore: FakeBookmarkStore(data: Data("old".utf8)))
+        let store = makeStore(
+            fileSystem: fs,
+            bookmarks: provider,
+            bookmarkStore: FakeBookmarkStore(data: Data("old".utf8))
+        )
 
         let lease = try store.resolveCurrentDestination()
         XCTAssertEqual(lease.url.path, "/moved")
@@ -49,12 +57,17 @@ final class RecordingDestinationStoreTests: XCTestCase {
         let fs = FakeDestinationFileSystem()
         let provider = FakeBookmarkProvider()
         provider.register(Data("moved-bookmark".utf8), url: URL(fileURLWithPath: "/new-location", isDirectory: true))
-        let store = makeStore(fileSystem: fs, bookmarks: provider, bookmarkStore: FakeBookmarkStore(data: Data("moved-bookmark".utf8)))
+        let store = makeStore(
+            fileSystem: fs,
+            bookmarks: provider,
+            bookmarkStore: FakeBookmarkStore(data: Data("moved-bookmark".utf8))
+        )
 
         let lease = try store.resolveCurrentDestination()
         XCTAssertEqual(lease.url.path, "/new-location")
         lease.close()
     }
+
     func testSelectedFolderRequiresSecurityScopedAccess() {
         let selected = URL(fileURLWithPath: "/chosen", isDirectory: true)
         let saved = Data("previous".utf8)
@@ -69,13 +82,16 @@ final class RecordingDestinationStoreTests: XCTestCase {
         XCTAssertEqual(dataStore.bookmarkData, saved)
     }
 
-
     func testInvalidNewFolderDoesNotReplaceSavedBookmark() {
         let saved = Data("previous".utf8)
         let storeData = FakeBookmarkStore(data: saved)
         let fs = FakeDestinationFileSystem()
         fs.unwritable.insert(URL(fileURLWithPath: "/bad-choice", isDirectory: true))
-        let store = makeStore(fileSystem: fs, panel: FakeDestinationPanel(url: URL(fileURLWithPath: "/bad-choice", isDirectory: true)), bookmarkStore: storeData)
+        let store = makeStore(
+            fileSystem: fs,
+            panel: FakeDestinationPanel(url: URL(fileURLWithPath: "/bad-choice", isDirectory: true)),
+            bookmarkStore: storeData
+        )
 
         XCTAssertThrowsError(try store.chooseFolder())
         XCTAssertEqual(storeData.bookmarkData, saved)
@@ -86,7 +102,12 @@ final class RecordingDestinationStoreTests: XCTestCase {
         let dataStore = FakeBookmarkStore()
         let fs = FakeDestinationFileSystem()
         let provider = FakeBookmarkProvider()
-        let store = makeStore(fileSystem: fs, bookmarks: provider, panel: FakeDestinationPanel(url: selected), bookmarkStore: dataStore)
+        let store = makeStore(
+            fileSystem: fs,
+            bookmarks: provider,
+            panel: FakeDestinationPanel(url: selected),
+            bookmarkStore: dataStore
+        )
 
         let lease = try store.chooseFolder()
         XCTAssertEqual(lease.url, selected)
@@ -118,17 +139,30 @@ private final class FakeDestinationFileSystem: RecordingDestinationFileSystem {
     var unwritable: Set<URL> = []
     var acquireScope = true
 
-    func createDirectoryIfNeeded(at url: URL) throws { created.append(url) }
-    func startAccessing(_ url: URL) -> Bool {
+    func createDirectoryIfNeeded(at url: URL) throws {
+        created.append(url)
+    }
+
+    func startAccessing(_: URL) -> Bool {
         guard acquireScope else { return false }
         activeScopes += 1
         return true
     }
-    func stopAccessing(_ url: URL) { activeScopes -= 1 }
-    func isDirectory(_ url: URL) -> Bool { true }
+
+    func stopAccessing(_: URL) {
+        activeScopes -= 1
+    }
+
+    func isDirectory(_: URL) -> Bool {
+        true
+    }
+
     func verifyWritable(_ url: URL) throws {
         if unwritable.contains(url) {
-            throw RecordingIssue(code: "destination-not-writable", message: "Noty cannot write to this folder. Check its permissions or choose another location.")
+            throw RecordingIssue(
+                code: "destination-not-writable",
+                message: "Noty cannot write to this folder. Check its permissions or choose another location."
+            )
         }
     }
 }
@@ -138,7 +172,10 @@ private final class FakeBookmarkProvider: RecordingBookmarkProviding {
     private(set) var createdURLs: [URL] = []
     private(set) var createdData: [Data] = []
 
-    func register(_ data: Data, url: URL, stale: Bool = false) { values[data] = (url, stale) }
+    func register(_ data: Data, url: URL, stale: Bool = false) {
+        values[data] = (url, stale)
+    }
+
     func makeBookmark(for url: URL) throws -> Data {
         let data = Data("bookmark-\(createdData.count)".utf8)
         values[data] = (url, false)
@@ -146,6 +183,7 @@ private final class FakeBookmarkProvider: RecordingBookmarkProviding {
         createdData.append(data)
         return data
     }
+
     func resolveBookmark(_ data: Data) throws -> (url: URL, isStale: Bool) {
         guard let (url, stale) = values[data] else { throw RecordingIssue(code: "missing", message: "missing") }
         return (url, stale)
@@ -154,12 +192,22 @@ private final class FakeBookmarkProvider: RecordingBookmarkProviding {
 
 private final class FakeDestinationPanel: RecordingDestinationPanel {
     let url: URL
-    init(url: URL) { self.url = url }
-    func chooseDirectory() throws -> URL { url }
+    init(url: URL) {
+        self.url = url
+    }
+
+    func chooseDirectory() throws -> URL {
+        url
+    }
 }
 
 private final class FakeBookmarkStore: RecordingDestinationBookmarkStore {
     var bookmarkData: Data?
-    init(data: Data? = nil) { bookmarkData = data }
-    func save(bookmarkData: Data) { self.bookmarkData = bookmarkData }
+    init(data: Data? = nil) {
+        bookmarkData = data
+    }
+
+    func save(bookmarkData: Data) {
+        self.bookmarkData = bookmarkData
+    }
 }

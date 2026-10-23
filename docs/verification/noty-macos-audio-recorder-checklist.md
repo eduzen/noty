@@ -27,6 +27,7 @@ Automated checks cannot exercise TCC prompts, ScreenCaptureKit against live appl
 
 | Status | Scenario | Procedure | Expected result |
 |---|---|---|---|
+| Not run | Signed entitlements | Build the app and inspect its signature with `codesign -d --entitlements :- build/DerivedData/Build/Products/Debug/Noty.app`. | The embedded plist contains App Sandbox, `com.apple.security.device.microphone`, Music Folder read/write, and user-selected files read/write, all enabled. |
 | Not run | Fresh permissions | Reset Noty's Microphone and Screen Recording privacy decisions. Launch Noty without starting a recording, then start one. | No permission prompt at launch. Start requests required access and never reports recording until capture starts. |
 | Not run | Permission denied, then granted | Deny microphone access. Confirm the actionable issue and System Settings action. Grant access in Settings and retry. Repeat for Screen Recording. | No silent recording. Denial is identified by permission type; retry succeeds when permission is available. |
 | Not run | Screen Recording relaunch requirement | Grant Screen Recording when macOS requires the app to relaunch. Retry before relaunch, then quit and reopen Noty. | Noty explains the relaunch requirement, does not start a silent recording, and can record after relaunch. |

@@ -1,22 +1,22 @@
-import XCTest
 @testable import Noty
+import XCTest
 
 final class AudioNormalizerTests: XCTestCase {
     func testConvertsMono44100ToStereo48000() throws {
-        let frames = 4_410
-        let input = (0..<frames).map { Float(sin(Double($0) * 0.04)) }
+        let frames = 4410
+        let input = (0 ..< frames).map { Float(sin(Double($0) * 0.04)) }
         let normalized = try AudioNormalizer().normalize(CapturedAudioPacket(
-            source: .microphone, presentationTime: 12.5, sampleRate: 44_100,
+            source: .microphone, presentationTime: 12.5, sampleRate: 44100,
             channelCount: 1, frameCount: frames, samples: input
         ))
 
         XCTAssertEqual(normalized.source, .microphone)
         XCTAssertEqual(normalized.presentationTime, 12.5)
-        XCTAssertEqual(normalized.sampleRate, 48_000)
+        XCTAssertEqual(normalized.sampleRate, 48000)
         XCTAssertEqual(normalized.channelCount, 2)
-        XCTAssertLessThanOrEqual(abs(normalized.frameCount - 4_800), 2)
+        XCTAssertLessThanOrEqual(abs(normalized.frameCount - 4800), 2)
         XCTAssertEqual(normalized.samples.count, normalized.frameCount * 2)
-        for frame in 0..<normalized.frameCount {
+        for frame in 0 ..< normalized.frameCount {
             XCTAssertEqual(normalized.samples[frame * 2], normalized.samples[frame * 2 + 1], accuracy: 0.0001)
         }
         XCTAssertGreaterThan(normalized.samples.map(abs).max() ?? 0, 0.5)
@@ -24,7 +24,7 @@ final class AudioNormalizerTests: XCTestCase {
 
     func testPreservesStereoChannelsAt48000() throws {
         let normalized = try AudioNormalizer().normalize(CapturedAudioPacket(
-            source: .system, presentationTime: 1, sampleRate: 48_000,
+            source: .system, presentationTime: 1, sampleRate: 48000,
             channelCount: 2, frameCount: 3, samples: [0.25, -0.5, 0.1, -0.2, 0, 0.75]
         ))
         XCTAssertEqual(normalized.frameCount, 3)
@@ -37,7 +37,7 @@ final class AudioNormalizerTests: XCTestCase {
     }
 
     func testRejectsMalformedPacketWithTypedError() {
-        let packet = CapturedAudioPacket(source: .system, presentationTime: 0, sampleRate: 48_000,
+        let packet = CapturedAudioPacket(source: .system, presentationTime: 0, sampleRate: 48000,
                                          channelCount: 2, frameCount: 2, samples: [0, 0])
         XCTAssertThrowsError(try AudioNormalizer().normalize(packet)) { error in
             guard let issue = error as? AudioPipelineError, case .malformedPacket = issue else {

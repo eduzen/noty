@@ -78,11 +78,25 @@ final class RecordingController: ObservableObject {
         self.recoveryDiscovery = recoveryDiscovery
     }
 
-    var canStart: Bool { state == .idle || state == .interrupted || state == .failed }
-    var canStop: Bool { state == .recording }
-    var canChooseDestination: Bool { canStart }
-    var hasActiveRecording: Bool { state == .starting || state == .recording || state == .stopping }
-    var destinationDisplayPath: String { currentDestinationURL?.path ?? "~/Music/Noty" }
+    var canStart: Bool {
+        state == .idle || state == .interrupted || state == .failed
+    }
+
+    var canStop: Bool {
+        state == .recording
+    }
+
+    var canChooseDestination: Bool {
+        canStart
+    }
+
+    var hasActiveRecording: Bool {
+        state == .starting || state == .recording || state == .stopping
+    }
+
+    var destinationDisplayPath: String {
+        currentDestinationURL?.path ?? "~/Music/Noty"
+    }
 
     func bootstrap() async {
         guard !didBootstrap else { return }
@@ -138,8 +152,12 @@ final class RecordingController: ObservableObject {
     }
 
     func finishForTermination() async -> Bool {
-        if state == .starting || state == .recording { await stop() }
-        if state == .stopping, let finalizationTask { _ = await finalizationTask.value }
+        if state == .starting || state == .recording {
+            await stop()
+        }
+        if state == .stopping, let finalizationTask {
+            _ = await finalizationTask.value
+        }
         guard let lastOutcome else { return true }
         switch lastOutcome {
         case .saved, .partial: return true
@@ -156,7 +174,9 @@ final class RecordingController: ObservableObject {
             latestIssue = nil
         } catch {
             let issue = issue(from: error)
-            if issue.code != "destination-selection-cancelled" { latestIssue = issue }
+            if issue.code != "destination-selection-cancelled" {
+                latestIssue = issue
+            }
         }
     }
 
@@ -199,9 +219,15 @@ final class RecordingController: ObservableObject {
     private func cancelStartup() async {
         state = .stopping
         timerTask?.cancel()
-        if let capture { await capture.stop() }
+        if let capture {
+            await capture.stop()
+        }
         if let writer {
-            _ = await writer.fail(RecordingIssue(code: "recording.start-cancelled", message: "Recording startup was cancelled.", isRetryAllowed: true))
+            _ = await writer.fail(RecordingIssue(
+                code: "recording.start-cancelled",
+                message: "Recording startup was cancelled.",
+                isRetryAllowed: true
+            ))
         }
         destinationLease?.close()
         destinationLease = nil
@@ -219,7 +245,9 @@ final class RecordingController: ObservableObject {
 
     private func failStartup(_ issue: RecordingIssue) async {
         timerTask?.cancel()
-        if let capture { await capture.stop() }
+        if let capture {
+            await capture.stop()
+        }
         let outcome = await writer?.fail(issue)
         if let outcome {
             apply(outcome, terminalState: terminalState(for: issue))
@@ -254,7 +282,11 @@ final class RecordingController: ObservableObject {
             }
             if state == .recording {
                 scheduleFinalization(
-                    issue: RecordingIssue(code: "capture.ended", message: "Audio capture stopped unexpectedly.", isRetryAllowed: true),
+                    issue: RecordingIssue(
+                        code: "capture.ended",
+                        message: "Audio capture stopped unexpectedly.",
+                        isRetryAllowed: true
+                    ),
                     terminalState: .interrupted
                 )
             }
@@ -272,8 +304,14 @@ final class RecordingController: ObservableObject {
             switch termination {
             case .userStopped:
                 guard state == .recording else { continue }
-                issue = RecordingIssue(code: "capture.ended", message: "Audio capture stopped unexpectedly.", isRetryAllowed: true)
-            case .screenRecordingDenied(let value), .interrupted(let value), .microphoneDisconnected(let value), .unexpected(let value), .queueOverflow(let value):
+                issue = RecordingIssue(
+                    code: "capture.ended",
+                    message: "Audio capture stopped unexpectedly.",
+                    isRetryAllowed: true
+                )
+            case let .screenRecordingDenied(value), let .interrupted(value), let .microphoneDisconnected(value),
+                 let .unexpected(value),
+                 let .queueOverflow(value):
                 issue = value
             }
             guard state == .recording || state == .stopping else { return }
@@ -286,9 +324,15 @@ final class RecordingController: ObservableObject {
         let normalized = try AudioNormalizer().normalize(packet)
         let chunks = try mixer.append(normalized)
         guard let writer else {
-            throw RecordingIssue(code: "writer.not-active", message: "The recording writer is unavailable.", isRetryAllowed: false)
+            throw RecordingIssue(
+                code: "writer.not-active",
+                message: "The recording writer is unavailable.",
+                isRetryAllowed: false
+            )
         }
-        for chunk in chunks { try await writer.append(chunk) }
+        for chunk in chunks {
+            try await writer.append(chunk)
+        }
     }
 
     private func scheduleFinalization(issue: RecordingIssue, terminalState: RecordingState) {
@@ -300,10 +344,17 @@ final class RecordingController: ObservableObject {
     }
 
     private func requestFinalization(issue: RecordingIssue?, terminalState: RecordingState?) async -> RecordingOutcome {
-        if let issue, let terminalState { pendingFailure = (issue, terminalState) }
-        if let finalizationTask { return await finalizationTask.value }
+        if let issue, let terminalState {
+            pendingFailure = (issue, terminalState)
+        }
+        if let finalizationTask {
+            return await finalizationTask.value
+        }
         guard writer != nil || capture != nil else {
-            let issue = issue ?? RecordingIssue(code: "recording.not-active", message: "There is no active recording to finalize.")
+            let issue = issue ?? RecordingIssue(
+                code: "recording.not-active",
+                message: "There is no active recording to finalize."
+            )
             return .failed(issue)
         }
         state = .stopping
@@ -313,7 +364,10 @@ final class RecordingController: ObservableObject {
         }
         let task = Task<RecordingOutcome, Never> { @MainActor [weak self] in
             guard let self else {
-                return RecordingOutcome.failed(RecordingIssue(code: "recording.controller-unavailable", message: "Recording finalization could not finish."))
+                return RecordingOutcome.failed(RecordingIssue(
+                    code: "recording.controller-unavailable",
+                    message: "Recording finalization could not finish."
+                ))
             }
             return await self.performFinalization(issue: issue, terminalState: terminalState)
         }
@@ -321,9 +375,14 @@ final class RecordingController: ObservableObject {
         return await task.value
     }
 
-    private func performFinalization(issue initialIssue: RecordingIssue?, terminalState initialState: RecordingState?) async -> RecordingOutcome {
-        if let capture { await capture.stop() }
-        if let captureTask { await captureTask.value }
+    private func performFinalization(issue initialIssue: RecordingIssue?,
+                                     terminalState initialState: RecordingState?) async -> RecordingOutcome {
+        if let capture {
+            await capture.stop()
+        }
+        if let captureTask {
+            await captureTask.value
+        }
         terminationTask?.cancel()
         terminationTask = nil
 
@@ -332,13 +391,17 @@ final class RecordingController: ObservableObject {
         let outcome: RecordingOutcome
         if let finalIssue {
             if finalState == .interrupted, let writer, let trailingChunks = try? mixer.finish() {
-                for chunk in trailingChunks { try? await writer.append(chunk) }
+                for chunk in trailingChunks {
+                    try? await writer.append(chunk)
+                }
             }
             outcome = await writer?.fail(finalIssue) ?? .failed(finalIssue)
         } else if let writer {
             do {
-                for chunk in try mixer.finish() { try await writer.append(chunk) }
-                outcome = .saved(try await writer.finish())
+                for chunk in try mixer.finish() {
+                    try await writer.append(chunk)
+                }
+                outcome = try .saved(await writer.finish())
             } catch {
                 let failure = issue(from: error)
                 let failedOutcome = await writer.fail(failure)
@@ -361,15 +424,17 @@ final class RecordingController: ObservableObject {
 
     private func apply(_ outcome: RecordingOutcome, terminalState: RecordingState?) {
         switch outcome {
-        case .saved(let artifact):
+        case let .saved(artifact):
             lastArtifact = artifact
             latestIssue = nil
             state = .idle
-        case .partial(let artifact, let issue):
-            if let artifact { lastArtifact = artifact }
+        case let .partial(artifact, issue):
+            if let artifact {
+                lastArtifact = artifact
+            }
             latestIssue = issue
             state = terminalState ?? .interrupted
-        case .failed(let issue):
+        case let .failed(issue):
             latestIssue = issue
             state = terminalState ?? .failed
         }
@@ -389,8 +454,7 @@ final class RecordingController: ObservableObject {
         timerTask?.cancel()
         timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: 1_000_000_000) }
-                catch { return }
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
                 guard let self, let start = self.recordingStartUptime else { return }
                 self.elapsedDuration = max(0, ProcessInfo.processInfo.systemUptime - start)
             }
@@ -402,25 +466,78 @@ final class RecordingController: ObservableObject {
     }
 
     private func issue(from error: Error) -> RecordingIssue {
-        if let issue = error as? RecordingIssue { return issue }
+        if let issue = error as? RecordingIssue {
+            return issue
+        }
         if let error = error as? AudioPipelineError {
             switch error {
-            case .malformedPacket(let message): return RecordingIssue(code: "audio.malformed-packet", message: message, isRetryAllowed: true)
-            case .unsupportedFormat(let message): return RecordingIssue(code: "audio.unsupported-format", message: message, isRetryAllowed: true)
-            case .conversionFailed(let message): return RecordingIssue(code: "audio.conversion-failed", message: message, isRetryAllowed: true)
-            case .timingDiscontinuity(let message): return RecordingIssue(code: "audio.timing-discontinuity", message: message, isRetryAllowed: false)
-            case .queueOverflow: return RecordingIssue(code: "audio.queue-overflow", message: "Audio processing exceeded its bounded buffer.", isRetryAllowed: false)
+            case let .malformedPacket(message): return RecordingIssue(
+                    code: "audio.malformed-packet",
+                    message: message,
+                    isRetryAllowed: true
+                )
+            case let .unsupportedFormat(message): return RecordingIssue(
+                    code: "audio.unsupported-format",
+                    message: message,
+                    isRetryAllowed: true
+                )
+            case let .conversionFailed(message): return RecordingIssue(
+                    code: "audio.conversion-failed",
+                    message: message,
+                    isRetryAllowed: true
+                )
+            case let .timingDiscontinuity(message): return RecordingIssue(
+                    code: "audio.timing-discontinuity",
+                    message: message,
+                    isRetryAllowed: false
+                )
+            case .queueOverflow: return RecordingIssue(
+                    code: "audio.queue-overflow",
+                    message: "Audio processing exceeded its bounded buffer.",
+                    isRetryAllowed: false
+                )
             }
         }
         if let error = error as? CaptureServiceError {
             switch error {
-            case .screenRecordingDenied: return RecordingIssue(code: "capture.screen-recording-denied", message: "Screen Recording permission is required.", recoveryURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"), isRetryAllowed: true)
-            case .noMainDisplay: return RecordingIssue(code: "capture.main-display-unavailable", message: "Noty could not resolve the main display for audio capture.", isRetryAllowed: true)
-            case .microphoneUnavailable: return RecordingIssue(code: "capture.microphone-unavailable", message: "No default microphone is available.", isRetryAllowed: true)
-            case .invalidAudioFormat: return RecordingIssue(code: "capture.invalid-audio", message: "ScreenCaptureKit returned an unsupported audio format.", isRetryAllowed: false)
-            case .queueOverflow: return RecordingIssue(code: "capture.queue-overflow", message: "Audio capture exceeded its bounded buffer.", isRetryAllowed: false)
-            case .streamFailure(let message): return RecordingIssue(code: "capture.stream-failed", message: message, isRetryAllowed: true)
-            case .alreadyStarted, .notStarted: return RecordingIssue(code: "capture.lifecycle-error", message: error.localizedDescription, isRetryAllowed: true)
+            case .screenRecordingDenied: return RecordingIssue(
+                    code: "capture.screen-recording-denied",
+                    message: "Screen Recording permission is required.",
+                    recoveryURL: URL(
+                        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+                    ),
+                    isRetryAllowed: true
+                )
+            case .noMainDisplay: return RecordingIssue(
+                    code: "capture.main-display-unavailable",
+                    message: "Noty could not resolve the main display for audio capture.",
+                    isRetryAllowed: true
+                )
+            case .microphoneUnavailable: return RecordingIssue(
+                    code: "capture.microphone-unavailable",
+                    message: "No default microphone is available.",
+                    isRetryAllowed: true
+                )
+            case .invalidAudioFormat: return RecordingIssue(
+                    code: "capture.invalid-audio",
+                    message: "ScreenCaptureKit returned an unsupported audio format.",
+                    isRetryAllowed: false
+                )
+            case .queueOverflow: return RecordingIssue(
+                    code: "capture.queue-overflow",
+                    message: "Audio capture exceeded its bounded buffer.",
+                    isRetryAllowed: false
+                )
+            case let .streamFailure(message): return RecordingIssue(
+                    code: "capture.stream-failed",
+                    message: message,
+                    isRetryAllowed: true
+                )
+            case .alreadyStarted, .notStarted: return RecordingIssue(
+                    code: "capture.lifecycle-error",
+                    message: error.localizedDescription,
+                    isRetryAllowed: true
+                )
             }
         }
         return RecordingIssue(code: "recording.failed", message: error.localizedDescription, isRetryAllowed: true)

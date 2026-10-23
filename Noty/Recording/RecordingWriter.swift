@@ -64,7 +64,8 @@ actor RecordingWriter {
         guard chunk.sampleRate == AudioFormat.sampleRate, chunk.channelCount == AudioFormat.channelCount,
               chunk.frameCount > 0, chunk.samples.count == chunk.frameCount * AudioFormat.channelCount,
               chunk.presentationTime.isFinite,
-              lastPresentationTime.map({ chunk.presentationTime >= $0 }) ?? true else {
+              lastPresentationTime.map({ chunk.presentationTime >= $0 }) ?? true
+        else {
             throw issue("writer.invalid-chunk", "The audio chunk is malformed or out of order.")
         }
         do {
@@ -72,19 +73,34 @@ actor RecordingWriter {
             try await recoveryStore?.append(chunk)
             lastPresentationTime = chunk.presentationTime
         } catch {
-            throw asIssue(error, code: "writer.write-failed", message: "Noty could not write the recording.", url: temporaryURL)
+            throw asIssue(
+                error,
+                code: "writer.write-failed",
+                message: "Noty could not write the recording.",
+                url: temporaryURL
+            )
         }
     }
 
     func finish() async throws -> RecordingArtifact {
-        if case .finished(let artifact) = state { return artifact }
-        if case .failed(.partial(_, let issue)) = state { throw issue }
-        if case .failed(.failed(let issue)) = state { throw issue }
+        if case let .finished(artifact) = state {
+            return artifact
+        }
+        if case let .failed(.partial(_, issue)) = state {
+            throw issue
+        }
+        if case let .failed(.failed(issue)) = state {
+            throw issue
+        }
         if case .finishing = state {
-            if let finishTask { return try await finishTask.value }
+            if let finishTask {
+                return try await finishTask.value
+            }
             if let failTask {
                 let outcome = await failTask.value
-                if case .saved(let artifact) = outcome { return artifact }
+                if case let .saved(artifact) = outcome {
+                    return artifact
+                }
                 throw outcome.issueOrFallback
             }
         }
@@ -98,17 +114,24 @@ actor RecordingWriter {
     }
 
     func fail(_ issue: RecordingIssue) async -> RecordingOutcome {
-        if case .finished(let artifact) = state { return .saved(artifact) }
-        if case .failed(let outcome) = state { return outcome }
+        if case let .finished(artifact) = state {
+            return .saved(artifact)
+        }
+        if case let .failed(outcome) = state {
+            return outcome
+        }
         if case .finishing = state {
             if let finishTask {
-                do { return .saved(try await finishTask.value) }
-                catch {
-                    if case .failed(let outcome) = state { return outcome }
+                do { return try .saved(await finishTask.value) } catch {
+                    if case let .failed(outcome) = state {
+                        return outcome
+                    }
                     return .failed(issue)
                 }
             }
-            if let failTask { return await failTask.value }
+            if let failTask {
+                return await failTask.value
+            }
         }
         guard case .active = state else { return .failed(issue) }
         state = .finishing
@@ -137,7 +160,12 @@ actor RecordingWriter {
             finishTask = nil
             return artifact
         } catch {
-            let issue = asIssue(error, code: "writer.finalize-failed", message: "Noty could not validate or save the recording.", url: temporaryURL)
+            let issue = asIssue(
+                error,
+                code: "writer.finalize-failed",
+                message: "Noty could not validate or save the recording.",
+                url: temporaryURL
+            )
             let outcome = await recover(issue)
             state = .failed(outcome)
             finishTask = nil
@@ -152,7 +180,6 @@ actor RecordingWriter {
         return outcome
     }
 
-
     private func recover(_ issue: RecordingIssue) async -> RecordingOutcome {
         writer?.cancel()
         writer = nil
@@ -162,7 +189,9 @@ actor RecordingWriter {
             candidates.append((temporaryURL, time))
         }
         for url in recoveryStore?.completedURLs ?? [] {
-            if let time = try? await validator.validate(url: url) { candidates.append((url, time)) }
+            if let time = try? await validator.validate(url: url) {
+                candidates.append((url, time))
+            }
         }
         guard let best = candidates.max(by: { $0.1 < $1.1 }) else { return .failed(issue) }
         let kind: RecordingArtifact.Kind = best.0 == temporaryURL ? .recording : .recovery
@@ -175,7 +204,10 @@ actor RecordingWriter {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd-HHmmss-SSS"
         var url = folder.appendingPathComponent("Noty-\(formatter.string(from: now())).m4a")
-        while fileSystem.fileExists(at: url) { url = folder.appendingPathComponent("Noty-\(formatter.string(from: now()))-\(UUID().uuidString.prefix(8)).m4a") }
+        while fileSystem.fileExists(at: url) {
+            url = folder
+                .appendingPathComponent("Noty-\(formatter.string(from: now()))-\(UUID().uuidString.prefix(8)).m4a")
+        }
         return url
     }
 
@@ -184,13 +216,22 @@ actor RecordingWriter {
     }
 
     private func asIssue(_ error: Error, code: String, message: String, url: URL? = nil) -> RecordingIssue {
-        if let issue = error as? RecordingIssue { return issue }
-        return RecordingIssue(code: code, message: "\(message) \(error.localizedDescription)", recoveryURL: url, isRetryAllowed: true)
+        if let issue = error as? RecordingIssue {
+            return issue
+        }
+        return RecordingIssue(
+            code: code,
+            message: "\(message) \(error.localizedDescription)",
+            recoveryURL: url,
+            isRetryAllowed: true
+        )
     }
 }
 
 struct AVRecordingMediaWriterFactory: RecordingMediaWriterFactory {
-    func makeWriter(at url: URL) throws -> RecordingMediaWriter { try AVRecordingMediaWriter(url: url) }
+    func makeWriter(at url: URL) throws -> RecordingMediaWriter {
+        try AVRecordingMediaWriter(url: url)
+    }
 }
 
 private final class AVRecordingMediaWriter: RecordingMediaWriter {
@@ -200,7 +241,8 @@ private final class AVRecordingMediaWriter: RecordingMediaWriter {
 
     init(url: URL) throws {
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioFormat.sampleRate,
-                                         channels: AVAudioChannelCount(AudioFormat.channelCount), interleaved: false) else {
+                                         channels: AVAudioChannelCount(AudioFormat.channelCount), interleaved: false)
+        else {
             throw RecordingIssue(code: "writer.format", message: "The recording audio format is unavailable.")
         }
         self.format = format
@@ -214,26 +256,33 @@ private final class AVRecordingMediaWriter: RecordingMediaWriter {
     func append(_ chunk: MixedAudioChunk) throws {
         guard !finished, let file,
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(chunk.frameCount)),
-              let channels = buffer.floatChannelData else {
+              let channels = buffer.floatChannelData
+        else {
             throw RecordingIssue(code: "writer.buffer", message: "The recording audio buffer could not be allocated.")
         }
         buffer.frameLength = AVAudioFrameCount(chunk.frameCount)
-        for frame in 0..<chunk.frameCount {
+        for frame in 0 ..< chunk.frameCount {
             channels[0][frame] = chunk.samples[frame * 2]
             channels[1][frame] = chunk.samples[frame * 2 + 1]
         }
         try file.write(from: buffer)
     }
 
-    func finish() async throws { finished = true; file = nil }
-    func cancel() { finished = true; file = nil }
+    func finish() async throws {
+        finished = true; file = nil
+    }
+
+    func cancel() {
+        finished = true; file = nil
+    }
 }
+
 private extension RecordingOutcome {
     var issueOrFallback: RecordingIssue {
         switch self {
         case .saved:
             return RecordingIssue(code: "writer.already-saved", message: "The recording was already saved.")
-        case .partial(_, let issue), .failed(let issue):
+        case let .partial(_, issue), let .failed(issue):
             return issue
         }
     }

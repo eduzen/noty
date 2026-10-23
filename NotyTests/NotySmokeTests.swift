@@ -1,5 +1,5 @@
-import XCTest
 @testable import Noty
+import XCTest
 
 final class NotySmokeTests: XCTestCase {
     func testInitialRecordingStateIsIdle() {

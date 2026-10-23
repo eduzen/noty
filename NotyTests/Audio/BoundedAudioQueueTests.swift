@@ -1,11 +1,11 @@
-import XCTest
 @testable import Noty
+import XCTest
 
 final class BoundedAudioQueueTests: XCTestCase {
     func testDequeuePreservesOrderAndReleasesCapacity() throws {
         var queue = BoundedAudioQueue(maximumDuration: 1, maximumCopiedBytes: 64)
         let first = chunk(time: 0, frames: 2, value: 0.1)
-        let second = chunk(time: 2.0 / 48_000, frames: 2, value: 0.2)
+        let second = chunk(time: 2.0 / 48000, frames: 2, value: 0.2)
         try queue.enqueue(first)
         try queue.enqueue(second)
         XCTAssertEqual(queue.count, 2)
@@ -21,7 +21,7 @@ final class BoundedAudioQueueTests: XCTestCase {
     func testFailsBeforeExceedingCopiedByteLimit() throws {
         var queue = BoundedAudioQueue(maximumDuration: 5, maximumCopiedBytes: 16)
         try queue.enqueue(chunk(time: 0, frames: 2, value: 0.25))
-        XCTAssertThrowsError(try queue.enqueue(chunk(time: 2.0 / 48_000, frames: 1, value: 0.5))) { error in
+        XCTAssertThrowsError(try queue.enqueue(chunk(time: 2.0 / 48000, frames: 1, value: 0.5))) { error in
             XCTAssertEqual(error as? AudioPipelineError, .queueOverflow)
         }
         XCTAssertEqual(queue.count, 1)
@@ -29,8 +29,8 @@ final class BoundedAudioQueueTests: XCTestCase {
     }
 
     func testFailsBeforeExceedingDurationLimit() throws {
-        var queue = BoundedAudioQueue(maximumDuration: 0.1, maximumCopiedBytes: 64 * 1_024)
-        try queue.enqueue(chunk(time: 0, frames: 4_800, value: 0.1))
+        var queue = BoundedAudioQueue(maximumDuration: 0.1, maximumCopiedBytes: 64 * 1024)
+        try queue.enqueue(chunk(time: 0, frames: 4800, value: 0.1))
         XCTAssertThrowsError(try queue.enqueue(chunk(time: 0.1, frames: 1, value: 0.2))) { error in
             XCTAssertEqual(error as? AudioPipelineError, .queueOverflow)
         }

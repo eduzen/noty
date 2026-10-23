@@ -23,7 +23,9 @@ struct PermissionGrant: Equatable, Sendable {
 }
 
 struct SystemMicrophonePermissionProvider: MicrophonePermissionProviding {
-    var authorizationStatus: AVAuthorizationStatus { AVCaptureDevice.authorizationStatus(for: .audio) }
+    var authorizationStatus: AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .audio)
+    }
 
     func requestAccess() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
@@ -31,14 +33,20 @@ struct SystemMicrophonePermissionProvider: MicrophonePermissionProviding {
 }
 
 struct SystemScreenRecordingPermissionProvider: ScreenRecordingPermissionProviding {
-    var isAuthorized: Bool { CGPreflightScreenCaptureAccess() }
-    func requestAccess() -> Bool { CGRequestScreenCaptureAccess() }
+    var isAuthorized: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    func requestAccess() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
 }
 
 struct SystemAudioInputEntitlementProvider: AudioInputEntitlementProviding {
     var isPresent: Bool {
         guard let task = SecTaskCreateFromSelf(nil),
-              let value = SecTaskCopyValueForEntitlement(task, "com.apple.security.device.microphone" as CFString, nil) else {
+              let value = SecTaskCopyValueForEntitlement(task, "com.apple.security.device.microphone" as CFString, nil)
+        else {
             return false
         }
         return (value as? Bool) == true
@@ -64,7 +72,9 @@ struct PermissionCoordinator {
         guard audioInputEntitlement.isPresent else {
             throw RecordingIssue(
                 code: "permission.audio-input-entitlement-missing",
-                message: "Noty is missing its Audio Input entitlement. Reinstall or rebuild Noty with Audio Input enabled.",
+                message: """
+                Noty is missing its Audio Input entitlement. Reinstall or rebuild Noty with Audio Input enabled.
+                """,
                 isRetryAllowed: false
             )
         }
@@ -79,7 +89,9 @@ struct PermissionCoordinator {
         case .restricted:
             throw RecordingIssue(
                 code: "permission.microphone-restricted",
-                message: "Microphone access is restricted by this Mac. Ask your administrator to allow microphone access.",
+                message: """
+                Microphone access is restricted by this Mac. Ask your administrator to allow microphone access.
+                """,
                 recoveryURL: Self.privacySettingsURL,
                 isRetryAllowed: false
             )
@@ -103,7 +115,9 @@ struct PermissionCoordinator {
             }
             throw RecordingIssue(
                 code: "permission.screen-recording-denied",
-                message: "Allow Noty in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.",
+                message: """
+                Allow Noty in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.
+                """,
                 recoveryURL: Self.screenRecordingSettingsURL,
                 isRetryAllowed: true
             )
@@ -115,12 +129,16 @@ struct PermissionCoordinator {
     private static func microphoneDenied() -> RecordingIssue {
         RecordingIssue(
             code: "permission.microphone-denied",
-            message: "Allow Noty to use the microphone in System Settings → Privacy & Security → Microphone, then try again.",
+            message: """
+            Allow Noty to use the microphone in System Settings → Privacy & Security → Microphone, then try again.
+            """,
             recoveryURL: privacySettingsURL,
             isRetryAllowed: true
         )
     }
 
-    private static let privacySettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-    private static let screenRecordingSettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+    private static let privacySettingsURL =
+        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    private static let screenRecordingSettingsURL =
+        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 }

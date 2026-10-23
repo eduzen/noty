@@ -13,14 +13,23 @@ struct BoundedAudioQueue {
     private(set) var queuedDuration: TimeInterval = 0
     private(set) var copiedBytes = 0
 
-    init(maximumDuration: TimeInterval = 5, maximumCopiedBytes: Int = 64 * 1_024 * 1_024, overflowPolicy: OverflowPolicy = .failOnOverflow) {
+    init(
+        maximumDuration: TimeInterval = 5,
+        maximumCopiedBytes: Int = 64 * 1024 * 1024,
+        overflowPolicy: OverflowPolicy = .failOnOverflow
+    ) {
         self.maximumDuration = max(0, maximumDuration)
         self.maximumCopiedBytes = max(0, maximumCopiedBytes)
         self.overflowPolicy = overflowPolicy
     }
 
-    var count: Int { storage.count - head }
-    var isEmpty: Bool { count == 0 }
+    var count: Int {
+        storage.count - head
+    }
+
+    var isEmpty: Bool {
+        count == 0
+    }
 
     mutating func enqueue(_ chunk: MixedAudioChunk) throws {
         let bytes = chunk.samples.count * MemoryLayout<Float>.size
@@ -31,8 +40,11 @@ struct BoundedAudioQueue {
               chunk.samples.count == chunk.frameCount * chunk.channelCount,
               duration.isFinite, duration <= maximumDuration, bytes <= maximumCopiedBytes,
               queuedDuration + duration <= maximumDuration,
-              copiedBytes + bytes <= maximumCopiedBytes else {
-            if overflowPolicy == .failOnOverflow { throw AudioPipelineError.queueOverflow }
+              copiedBytes + bytes <= maximumCopiedBytes
+        else {
+            if overflowPolicy == .failOnOverflow {
+                throw AudioPipelineError.queueOverflow
+            }
             return
         }
         storage.append(chunk)
@@ -49,7 +61,7 @@ struct BoundedAudioQueue {
         if head == storage.count {
             storage.removeAll(keepingCapacity: true)
             head = 0
-        } else if head >= 64 && head * 2 >= storage.count {
+        } else if head >= 64, head * 2 >= storage.count {
             storage.removeFirst(head)
             head = 0
         }

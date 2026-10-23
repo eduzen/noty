@@ -1,5 +1,5 @@
-import XCTest
 @testable import Noty
+import XCTest
 
 final class MenuBarViewTests: XCTestCase {
     func testStatusItemAccessibleLabelTracksEveryRecordingState() {
@@ -18,7 +18,7 @@ final class MenuBarViewTests: XCTestCase {
     }
 
     func testElapsedTimeFormattingHandlesHoursAndNegativeInput() {
-        XCTAssertEqual(RecordingStatusView.formatDuration(3_661), "1:01:01")
+        XCTAssertEqual(RecordingStatusView.formatDuration(3661), "1:01:01")
         XCTAssertEqual(RecordingStatusView.formatDuration(9), "00:09")
         XCTAssertEqual(RecordingStatusView.formatDuration(-2), "00:00")
     }

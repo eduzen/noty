@@ -16,7 +16,15 @@ struct CapturedAudioPacket: Sendable {
     let samples: [Float]
     let isDiscontinuity: Bool
 
-    init(source: AudioSource, presentationTime: TimeInterval, sampleRate: Double, channelCount: Int, frameCount: Int, samples: [Float], isDiscontinuity: Bool = false) {
+    init(
+        source: AudioSource,
+        presentationTime: TimeInterval,
+        sampleRate: Double,
+        channelCount: Int,
+        frameCount: Int,
+        samples: [Float],
+        isDiscontinuity: Bool = false
+    ) {
         self.source = source
         self.presentationTime = presentationTime
         self.sampleRate = sampleRate
@@ -37,11 +45,17 @@ struct NormalizedAudioPacket: Sendable {
     let samples: [Float]
     let isDiscontinuity: Bool
 
-    init(source: AudioSource, presentationTime: TimeInterval, frameCount: Int, samples: [Float], isDiscontinuity: Bool = false) {
+    init(
+        source: AudioSource,
+        presentationTime: TimeInterval,
+        frameCount: Int,
+        samples: [Float],
+        isDiscontinuity: Bool = false
+    ) {
         self.source = source
         self.presentationTime = presentationTime
-        self.sampleRate = AudioFormat.sampleRate
-        self.channelCount = AudioFormat.channelCount
+        sampleRate = AudioFormat.sampleRate
+        channelCount = AudioFormat.channelCount
         self.frameCount = frameCount
         self.samples = samples
         self.isDiscontinuity = isDiscontinuity
@@ -49,7 +63,7 @@ struct NormalizedAudioPacket: Sendable {
 }
 
 enum AudioFormat {
-    static let sampleRate = 48_000.0
+    static let sampleRate = 48000.0
     static let channelCount = 2
 }
 
@@ -63,8 +77,8 @@ struct MixedAudioChunk: Sendable {
 
     init(presentationTime: TimeInterval, frameCount: Int, samples: [Float]) {
         self.presentationTime = presentationTime
-        self.sampleRate = AudioFormat.sampleRate
-        self.channelCount = AudioFormat.channelCount
+        sampleRate = AudioFormat.sampleRate
+        channelCount = AudioFormat.channelCount
         self.frameCount = frameCount
         self.samples = samples
     }

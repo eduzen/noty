@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
-import XCTest
 @testable import Noty
+import XCTest
 
 @MainActor
 final class RecordingPipelineIntegrationTests: XCTestCase {
@@ -22,9 +22,9 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
         await controller.start()
         XCTAssertEqual(controller.state, .recording)
 
-        let packetFrames = 4_800
-        for index in 0..<600 {
-            guard !(3...5).contains(index) else { continue }
+        let packetFrames = 4800
+        for index in 0 ..< 600 {
+            guard !(3 ... 5).contains(index) else { continue }
             let presentationTime = Double(index) / 10
             let overloadedMix = index >= 6
             capture.emit(packet(
@@ -55,7 +55,7 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
         XCTAssertEqual(validatedDuration, 60, accuracy: 0.1)
 
         let file = try AVAudioFile(forReading: artifact.url)
-        XCTAssertEqual(file.processingFormat.sampleRate, 48_000)
+        XCTAssertEqual(file.processingFormat.sampleRate, 48000)
         XCTAssertEqual(file.processingFormat.channelCount, 2)
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(
             pcmFormat: file.processingFormat,
@@ -66,16 +66,17 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
         let channel = try XCTUnwrap(buffer.floatChannelData).pointee
         let samples = UnsafeBufferPointer(start: channel, count: frameCount)
 
-        XCTAssertGreaterThan(spectralAmplitude(samples, in: 4_800..<14_400, frequency: 440), 0.2)
-        XCTAssertGreaterThan(spectralAmplitude(samples, in: 4_800..<14_400, frequency: 880), 0.1)
-        XCTAssertLessThan(rootMeanSquare(samples, in: 19_200..<24_000), 0.01)
+        XCTAssertGreaterThan(spectralAmplitude(samples, in: 4800 ..< 14400, frequency: 440), 0.2)
+        XCTAssertGreaterThan(spectralAmplitude(samples, in: 4800 ..< 14400, frequency: 880), 0.1)
+        XCTAssertLessThan(rootMeanSquare(samples, in: 19200 ..< 24000), 0.01)
         XCTAssertLessThanOrEqual(peak(samples), 0.92)
     }
 
-    private func packet(source: AudioSource, time: Double, frames: Int, frequency: Double, amplitude: Double) -> CapturedAudioPacket {
+    private func packet(source: AudioSource, time: Double, frames: Int, frequency: Double,
+                        amplitude: Double) -> CapturedAudioPacket {
         var samples: [Float] = []
         samples.reserveCapacity(frames * 2)
-        for frame in 0..<frames {
+        for frame in 0 ..< frames {
             let instant = time + Double(frame) / AudioFormat.sampleRate
             let sample = Float(amplitude * sin(2 * Double.pi * frequency * instant))
             samples.append(sample)
@@ -91,7 +92,8 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
         )
     }
 
-    private func spectralAmplitude(_ samples: UnsafeBufferPointer<Float>, in range: Range<Int>, frequency: Double) -> Double {
+    private func spectralAmplitude(_ samples: UnsafeBufferPointer<Float>, in range: Range<Int>,
+                                   frequency: Double) -> Double {
         var real = 0.0
         var imaginary = 0.0
         for frame in range {
@@ -122,6 +124,11 @@ private struct IntegrationPermissions: RecordingPermissionPreparing {
 @MainActor
 private struct IntegrationDestinations: RecordingDestinationManaging {
     let url: URL
-    func resolveCurrentDestination() throws -> DestinationLease { DestinationLease(url: url, releaseAccess: nil) }
-    func chooseFolder() throws -> DestinationLease { DestinationLease(url: url, releaseAccess: nil) }
+    func resolveCurrentDestination() throws -> DestinationLease {
+        DestinationLease(url: url, releaseAccess: nil)
+    }
+
+    func chooseFolder() throws -> DestinationLease {
+        DestinationLease(url: url, releaseAccess: nil)
+    }
 }

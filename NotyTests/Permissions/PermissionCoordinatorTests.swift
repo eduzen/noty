@@ -1,12 +1,16 @@
 import AVFoundation
-import XCTest
 @testable import Noty
+import XCTest
 
 final class PermissionCoordinatorTests: XCTestCase {
     func testNotDeterminedMicrophoneIsRequestedDuringPreparation() async throws {
         let microphone = FakeMicrophone(status: .notDetermined, requestResult: true)
         let screen = FakeScreenRecording(authorized: true)
-        let coordinator = PermissionCoordinator(microphone: microphone, screenRecording: screen, audioInputEntitlement: FakeEntitlement(present: true))
+        let coordinator = PermissionCoordinator(
+            microphone: microphone,
+            screenRecording: screen,
+            audioInputEntitlement: FakeEntitlement(present: true)
+        )
 
         let grant = try await coordinator.prepareForRecording()
 
@@ -14,10 +18,15 @@ final class PermissionCoordinatorTests: XCTestCase {
         XCTAssertEqual(microphone.requestCount, 1)
         XCTAssertEqual(screen.requestCount, 0)
     }
+
     func testAuthorizedPermissionsProduceGrantWithoutPrompting() async throws {
         let microphone = FakeMicrophone(status: .authorized)
         let screen = FakeScreenRecording(authorized: true)
-        let coordinator = PermissionCoordinator(microphone: microphone, screenRecording: screen, audioInputEntitlement: FakeEntitlement(present: true))
+        let coordinator = PermissionCoordinator(
+            microphone: microphone,
+            screenRecording: screen,
+            audioInputEntitlement: FakeEntitlement(present: true)
+        )
 
         let grant = try await coordinator.prepareForRecording()
 
@@ -27,10 +36,13 @@ final class PermissionCoordinatorTests: XCTestCase {
         XCTAssertEqual(screen.requestCount, 0)
     }
 
-
     func testDeniedMicrophoneHasActionableSettingsURLAndDoesNotRequestScreenPermission() async {
         let screen = FakeScreenRecording(authorized: false)
-        let coordinator = PermissionCoordinator(microphone: FakeMicrophone(status: .denied), screenRecording: screen, audioInputEntitlement: FakeEntitlement(present: true))
+        let coordinator = PermissionCoordinator(
+            microphone: FakeMicrophone(status: .denied),
+            screenRecording: screen,
+            audioInputEntitlement: FakeEntitlement(present: true)
+        )
 
         do {
             _ = try await coordinator.prepareForRecording()
@@ -48,7 +60,11 @@ final class PermissionCoordinatorTests: XCTestCase {
 
     func testAuthorizedMicrophoneAndDeniedScreenRecordingRemainSeparate() async {
         let screen = FakeScreenRecording(authorized: false, requestResult: false)
-        let coordinator = PermissionCoordinator(microphone: FakeMicrophone(status: .authorized), screenRecording: screen, audioInputEntitlement: FakeEntitlement(present: true))
+        let coordinator = PermissionCoordinator(
+            microphone: FakeMicrophone(status: .authorized),
+            screenRecording: screen,
+            audioInputEntitlement: FakeEntitlement(present: true)
+        )
 
         do {
             _ = try await coordinator.prepareForRecording()
@@ -65,7 +81,11 @@ final class PermissionCoordinatorTests: XCTestCase {
 
     func testNewlyGrantedScreenRecordingRequiresRelaunch() async {
         let screen = FakeScreenRecording(authorized: false, requestResult: true)
-        let coordinator = PermissionCoordinator(microphone: FakeMicrophone(status: .authorized), screenRecording: screen, audioInputEntitlement: FakeEntitlement(present: true))
+        let coordinator = PermissionCoordinator(
+            microphone: FakeMicrophone(status: .authorized),
+            screenRecording: screen,
+            audioInputEntitlement: FakeEntitlement(present: true)
+        )
 
         do {
             _ = try await coordinator.prepareForRecording()
@@ -81,7 +101,11 @@ final class PermissionCoordinatorTests: XCTestCase {
     }
 
     func testRestrictedMicrophoneAndMissingEntitlementAreActionable() async {
-        let restricted = PermissionCoordinator(microphone: FakeMicrophone(status: .restricted), screenRecording: FakeScreenRecording(authorized: true), audioInputEntitlement: FakeEntitlement(present: true))
+        let restricted = PermissionCoordinator(
+            microphone: FakeMicrophone(status: .restricted),
+            screenRecording: FakeScreenRecording(authorized: true),
+            audioInputEntitlement: FakeEntitlement(present: true)
+        )
         do {
             _ = try await restricted.prepareForRecording()
             XCTFail("Expected restricted issue")
@@ -90,7 +114,11 @@ final class PermissionCoordinatorTests: XCTestCase {
             XCTAssertNotNil(issue.recoveryURL)
         } catch { XCTFail("Unexpected error: \(error)") }
 
-        let missing = PermissionCoordinator(microphone: FakeMicrophone(status: .authorized), screenRecording: FakeScreenRecording(authorized: true), audioInputEntitlement: FakeEntitlement(present: false))
+        let missing = PermissionCoordinator(
+            microphone: FakeMicrophone(status: .authorized),
+            screenRecording: FakeScreenRecording(authorized: true),
+            audioInputEntitlement: FakeEntitlement(present: false)
+        )
         do {
             _ = try await missing.prepareForRecording()
             XCTFail("Expected missing entitlement issue")
@@ -135,5 +163,7 @@ private final class FakeScreenRecording: ScreenRecordingPermissionProviding {
 
 private struct FakeEntitlement: AudioInputEntitlementProviding {
     let isPresent: Bool
-    init(present: Bool) { isPresent = present }
+    init(present: Bool) {
+        isPresent = present
+    }
 }

@@ -2,8 +2,8 @@ import Foundation
 
 /// PTS-ordered accumulator. Packets may arrive up to `reorderWindow` late; later overlap is trimmed.
 struct AudioTimeline {
-    private static let maximumBufferedFrames = 5 * 48_000
-    private static let maximumBufferedBytes = 64 * 1_024 * 1_024
+    private static let maximumBufferedFrames = 5 * 48000
+    private static let maximumBufferedBytes = 64 * 1024 * 1024
 
     private let reorderWindow: TimeInterval
     private let configuredOrigin: TimeInterval?
@@ -15,9 +15,9 @@ struct AudioTimeline {
     private var pendingBytes = 0
 
     init(origin: TimeInterval? = nil, reorderWindow: TimeInterval = 0.25) {
-        self.configuredOrigin = origin
+        configuredOrigin = origin
         self.origin = origin
-        self.outputOrigin = origin
+        outputOrigin = origin
         self.reorderWindow = max(0, reorderWindow)
     }
 
@@ -25,7 +25,8 @@ struct AudioTimeline {
         guard packet.presentationTime.isFinite, packet.presentationTime >= 0,
               packet.frameCount > 0, packet.frameCount <= Int.max / AudioFormat.channelCount,
               packet.samples.count == packet.frameCount * AudioFormat.channelCount,
-              packet.samples.allSatisfy(\.isFinite) else {
+              packet.samples.allSatisfy(\.isFinite)
+        else {
             throw AudioPipelineError.malformedPacket("Normalized packet has invalid timing or sample count.")
         }
 
@@ -39,13 +40,14 @@ struct AudioTimeline {
         let relativeEndFrame = (packetEnd - timelineOrigin) * AudioFormat.sampleRate
         guard packetEnd.isFinite, relativeFrame.isFinite, relativeEndFrame.isFinite,
               abs(relativeFrame) < Double(Int64.max) - Double(packet.frameCount),
-              abs(relativeEndFrame) < Double(Int64.max) else {
+              abs(relativeEndFrame) < Double(Int64.max)
+        else {
             throw AudioPipelineError.timingDiscontinuity("Audio timestamps exceed the supported output timeline.")
         }
 
         var chunks: [MixedAudioChunk] = []
         if let previousEnd = latestEnd, packet.isDiscontinuity {
-            chunks.append(contentsOf: try render(through: frame(at: previousEnd)))
+            try chunks.append(contentsOf: render(through: frame(at: previousEnd)))
             let continuedOutputOrigin = (outputOrigin ?? previousEnd) + Double(cursorFrame) / AudioFormat.sampleRate
             pending.removeAll(keepingCapacity: true)
             pendingBytes = 0
@@ -67,11 +69,15 @@ struct AudioTimeline {
         var pendingEnd = packetEnd
         for buffered in pending {
             pendingStart = min(pendingStart, buffered.presentationTime)
-            pendingEnd = max(pendingEnd, buffered.presentationTime + Double(buffered.frameCount) / AudioFormat.sampleRate)
+            pendingEnd = max(
+                pendingEnd,
+                buffered.presentationTime + Double(buffered.frameCount) / AudioFormat.sampleRate
+            )
         }
         let pendingDuration = (pendingEnd - pendingStart) * AudioFormat.sampleRate
         guard !nextBytes.overflow, nextBytes.partialValue <= Self.maximumBufferedBytes,
-              pendingDuration.isFinite, pendingDuration <= Double(Self.maximumBufferedFrames) else {
+              pendingDuration.isFinite, pendingDuration <= Double(Self.maximumBufferedFrames)
+        else {
             throw AudioPipelineError.queueOverflow
         }
         latestEnd = max(latestEnd ?? packetEnd, packetEnd)
@@ -79,13 +85,13 @@ struct AudioTimeline {
         pendingBytes = nextBytes.partialValue
         pending.sort(by: Self.packetOrder)
         let watermark = max(origin!, latestEnd! - reorderWindow)
-        chunks.append(contentsOf: try render(through: frame(at: watermark)))
+        try chunks.append(contentsOf: render(through: frame(at: watermark)))
         return chunks
     }
 
     mutating func finish(through endTime: TimeInterval? = nil) throws -> [MixedAudioChunk] {
         guard let latestEnd else { return [] }
-        if let endTime, (!endTime.isFinite || endTime < 0) {
+        if let endTime, !endTime.isFinite || endTime < 0 {
             throw AudioPipelineError.malformedPacket("The requested timeline end is invalid.")
         }
         let finalEnd = max(latestEnd, endTime ?? latestEnd)
@@ -98,9 +104,15 @@ struct AudioTimeline {
     }
 
     private static func packetOrder(_ lhs: NormalizedAudioPacket, _ rhs: NormalizedAudioPacket) -> Bool {
-        if lhs.presentationTime != rhs.presentationTime { return lhs.presentationTime < rhs.presentationTime }
-        if lhs.source != rhs.source { return lhs.source.rawValue < rhs.source.rawValue }
-        if lhs.frameCount != rhs.frameCount { return lhs.frameCount > rhs.frameCount }
+        if lhs.presentationTime != rhs.presentationTime {
+            return lhs.presentationTime < rhs.presentationTime
+        }
+        if lhs.source != rhs.source {
+            return lhs.source.rawValue < rhs.source.rawValue
+        }
+        if lhs.frameCount != rhs.frameCount {
+            return lhs.frameCount > rhs.frameCount
+        }
         return lhs.samples.lexicographicallyPrecedes(rhs.samples)
     }
 
@@ -115,7 +127,7 @@ struct AudioTimeline {
         }
         var result: [MixedAudioChunk] = []
         while cursorFrame < targetFrame {
-            let count = Int(min(4_096, targetFrame - cursorFrame))
+            let count = Int(min(4096, targetFrame - cursorFrame))
             var mix = [Float](repeating: 0, count: count * AudioFormat.channelCount)
             var occupied = [Bool](repeating: false, count: count * AudioFormat.channelCount)
             let intervalStart = cursorFrame
@@ -127,7 +139,7 @@ struct AudioTimeline {
                 let overlapEnd = min(intervalEnd, end)
                 guard overlapStart < overlapEnd else { continue }
                 let sourceIndex = packet.source == .system ? 0 : 1
-                for absoluteFrame in overlapStart..<overlapEnd {
+                for absoluteFrame in overlapStart ..< overlapEnd {
                     let sourceFrame = Int(absoluteFrame - start)
                     let destinationFrame = Int(absoluteFrame - intervalStart)
                     guard !occupied[destinationFrame * 2 + sourceIndex] else { continue }
@@ -144,7 +156,8 @@ struct AudioTimeline {
         retained.reserveCapacity(pending.count)
         pendingBytes = 0
         for packet in pending {
-            let end = Int64(((packet.presentationTime - origin) * AudioFormat.sampleRate).rounded()) + Int64(packet.frameCount)
+            let end = Int64(((packet.presentationTime - origin) * AudioFormat.sampleRate).rounded()) +
+                Int64(packet.frameCount)
             if end > cursorFrame {
                 retained.append(packet)
                 pendingBytes += packet.samples.count * MemoryLayout<Float>.size

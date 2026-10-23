@@ -21,7 +21,9 @@ struct ScreenCaptureError: Error, Equatable, Sendable {
                 issue: RecordingIssue(
                     code: "capture.screen-recording-denied",
                     message: "Screen Recording permission is required to capture audio.",
-                    recoveryURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
+                    recoveryURL: URL(
+                        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+                    ),
                     isRetryAllowed: true
                 )
             )
@@ -31,13 +33,21 @@ struct ScreenCaptureError: Error, Equatable, Sendable {
            nsError.code == NSUserCancelledError {
             return ScreenCaptureError(
                 kind: .interrupted,
-                issue: RecordingIssue(code: "capture.interrupted", message: "Audio capture was interrupted.", isRetryAllowed: true)
+                issue: RecordingIssue(
+                    code: "capture.interrupted",
+                    message: "Audio capture was interrupted.",
+                    isRetryAllowed: true
+                )
             )
         }
 
         return ScreenCaptureError(
             kind: .unexpected,
-            issue: RecordingIssue(code: "capture.stream-failed", message: error.localizedDescription, isRetryAllowed: true)
+            issue: RecordingIssue(
+                code: "capture.stream-failed",
+                message: error.localizedDescription,
+                isRetryAllowed: true
+            )
         )
     }
 }

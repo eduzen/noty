@@ -29,6 +29,7 @@ final class RecoverySegmentStore {
         self.fileSystem = fileSystem
         self.segmentDuration = segmentDuration
     }
+
     /// Closes the current standalone AAC file when the next chunk crosses the segment-duration boundary.
     /// This bounds crash loss to the active segment while keeping completed files independently playable.
     func append(_ chunk: MixedAudioChunk) async throws {
@@ -42,8 +43,7 @@ final class RecoverySegmentStore {
             currentURL = url
             currentStart = chunk.presentationTime
         }
-        do { try currentWriter?.append(chunk) }
-        catch {
+        do { try currentWriter?.append(chunk) } catch {
             currentWriter?.cancel()
             currentWriter = nil
             currentURL = nil
@@ -59,7 +59,12 @@ final class RecoverySegmentStore {
         currentURL = nil
         currentStart = nil
         guard fileSystem.fileExists(at: url), fileSystem.isReadable(at: url) else {
-            throw RecordingIssue(code: "recovery.invalid", message: "A recovery segment could not be read.", recoveryURL: url, isRetryAllowed: false)
+            throw RecordingIssue(
+                code: "recovery.invalid",
+                message: "A recovery segment could not be read.",
+                recoveryURL: url,
+                isRetryAllowed: false
+            )
         }
         completedURLs.append(url)
     }
@@ -75,7 +80,8 @@ final class RecoverySegmentStore {
     ) async -> [RecordingArtifact] {
         guard let entries = try? fileSystem.contentsOfDirectory(at: parentDirectory) else { return [] }
         var artifacts: [RecordingArtifact] = []
-        for directory in entries where directory.lastPathComponent.hasPrefix(".noty-recovery-") && fileSystem.isDirectory(at: directory) {
+        for directory in entries
+            where directory.lastPathComponent.hasPrefix(".noty-recovery-") && fileSystem.isDirectory(at: directory) {
             guard let segments = try? fileSystem.contentsOfDirectory(at: directory) else { continue }
             for segment in segments where segment.pathExtension == "m4a" {
                 guard let duration = try? await validator.validate(url: segment) else { continue }
@@ -84,8 +90,10 @@ final class RecoverySegmentStore {
         }
         return artifacts.sorted { $0.url.path < $1.url.path }
     }
+
     func closeBestEffort() async {
-        do { try await closeCurrent() }
-        catch { currentWriter?.cancel(); currentWriter = nil; currentURL = nil; currentStart = nil }
+        do { try await closeCurrent() } catch {
+            currentWriter?.cancel(); currentWriter = nil; currentURL = nil; currentStart = nil
+        }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
-import XCTest
 @testable import Noty
+import XCTest
 
 final class RecordingWriterTests: XCTestCase {
     func testSuccessfulFinishCreatesUniqueTimestampedRecording() async throws {
@@ -36,8 +36,11 @@ final class RecordingWriterTests: XCTestCase {
         try await writer.start(at: fixture.folder)
         try await writer.append(chunk(time: 0))
         _ = try await writer.finish()
-        do { try await writer.append(chunk(time: 1)); XCTFail("Expected terminal-state rejection") }
-        catch let issue as RecordingIssue { XCTAssertEqual(issue.code, "writer.not-active") }
+        do { try await writer.append(chunk(time: 1)); XCTFail("Expected terminal-state rejection")
+        } catch let issue as RecordingIssue { XCTAssertEqual(
+            issue.code,
+            "writer.not-active"
+        ) }
     }
 
     func testMalformedAndOutOfOrderChunksAreRejected() async throws {
@@ -45,8 +48,11 @@ final class RecordingWriterTests: XCTestCase {
         let writer = fixture.makeWriter()
         try await writer.start(at: fixture.folder)
         try await writer.append(chunk(time: 1))
-        do { try await writer.append(chunk(time: 0)); XCTFail("Expected order rejection") }
-        catch let issue as RecordingIssue { XCTAssertEqual(issue.code, "writer.invalid-chunk") }
+        do { try await writer.append(chunk(time: 0)); XCTFail("Expected order rejection")
+        } catch let issue as RecordingIssue { XCTAssertEqual(
+            issue.code,
+            "writer.invalid-chunk"
+        ) }
     }
 
     func testWriterFailureReportsValidatedRecoverySegment() async throws {
@@ -57,10 +63,13 @@ final class RecordingWriterTests: XCTestCase {
         fixture.validator.invalidURLs.insert(fixture.factory.writers[0].url)
         try await writer.append(chunk(time: 0))
         try await writer.append(chunk(time: 1))
-        do { try await writer.append(chunk(time: 2)); XCTFail("Expected injected disk-full failure") }
-        catch let issue as RecordingIssue { XCTAssertEqual(issue.code, "disk.full") }
+        do { try await writer.append(chunk(time: 2)); XCTFail("Expected injected disk-full failure")
+        } catch let issue as RecordingIssue { XCTAssertEqual(
+            issue.code,
+            "disk.full"
+        ) }
         let outcome = await writer.fail(RecordingIssue(code: "recording.interrupted", message: "Interrupted"))
-        guard case .partial(let artifact?, let issue) = outcome else { return XCTFail("Expected recovery artifact") }
+        guard case let .partial(artifact?, issue) = outcome else { return XCTFail("Expected recovery artifact") }
         XCTAssertEqual(artifact.kind, .recovery)
         XCTAssertEqual(issue.code, "recording.interrupted")
         XCTAssertTrue(fixture.validator.validURLs.contains(artifact.url))
@@ -73,8 +82,12 @@ final class RecordingWriterTests: XCTestCase {
         let writer = fixture.makeWriter()
         try await writer.start(at: fixture.folder)
         try await writer.append(chunk(time: 0))
-        do { _ = try await writer.finish(); XCTFail("Expected validation failure") }
-        catch let issue as RecordingIssue { XCTAssertEqual(issue.code, "media.invalid") }
+        do { _ = try await writer.finish(); XCTFail("Expected validation failure") } catch let issue as RecordingIssue {
+            XCTAssertEqual(
+                issue.code,
+                "media.invalid"
+            )
+        }
     }
 
     func testDuplicateFailureAndAppendAfterFailureAreDeterministic() async throws {
@@ -86,8 +99,11 @@ final class RecordingWriterTests: XCTestCase {
         let first = await writer.fail(failure)
         let second = await writer.fail(RecordingIssue(code: "different", message: "Different"))
         XCTAssertEqual(first, second)
-        do { try await writer.append(chunk(time: 1)); XCTFail("Expected terminal-state rejection") }
-        catch let issue as RecordingIssue { XCTAssertEqual(issue.code, "writer.not-active") }
+        do { try await writer.append(chunk(time: 1)); XCTFail("Expected terminal-state rejection")
+        } catch let issue as RecordingIssue { XCTAssertEqual(
+            issue.code,
+            "writer.not-active"
+        ) }
     }
 
     func testConcurrentFinishCallsShareFinalizationAndFailWaitsForItsResult() async throws {
@@ -119,7 +135,7 @@ final class RecordingWriterTests: XCTestCase {
         try await writer.append(chunk(time: 0))
         try await writer.append(chunk(time: 1))
         let outcome = await writer.fail(RecordingIssue(code: "recording.interrupted", message: "Interrupted"))
-        guard case .partial(let artifact?, _) = outcome else { return XCTFail("Expected active recovery artifact") }
+        guard case let .partial(artifact?, _) = outcome else { return XCTFail("Expected active recovery artifact") }
         let discovered = await RecoverySegmentStore.discoverOrphanedArtifacts(
             in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem
         )
@@ -132,13 +148,16 @@ final class RecordingWriterTests: XCTestCase {
         let writer = fixture.makeWriter()
         try await writer.start(at: fixture.folder)
         let oversized = MixedAudioChunk(presentationTime: 0, frameCount: 240_001, samples: [])
-        do { try await writer.append(oversized); XCTFail("Expected bounded-writer overflow") }
-        catch let issue as RecordingIssue { XCTAssertEqual(issue.code, "writer.overflow") }
+        do { try await writer.append(oversized); XCTFail("Expected bounded-writer overflow")
+        } catch let issue as RecordingIssue { XCTAssertEqual(
+            issue.code,
+            "writer.overflow"
+        ) }
         XCTAssertEqual(fixture.factory.appendCount, 0)
     }
 
     private func chunk(time: Double) -> MixedAudioChunk {
-        MixedAudioChunk(presentationTime: time, frameCount: 48_000, samples: Array(repeating: 0.1, count: 96_000))
+        MixedAudioChunk(presentationTime: time, frameCount: 48000, samples: Array(repeating: 0.1, count: 96000))
     }
 }
 
@@ -153,6 +172,7 @@ private final class Fixture {
         self.segmentDuration = segmentDuration
         factory.configure(fileSystem: fileSystem)
     }
+
     func makeWriter() -> RecordingWriter {
         RecordingWriter(factory: factory, validator: validator, fileSystem: fileSystem,
                         recoverySegmentDuration: segmentDuration, now: { self.date })
@@ -162,17 +182,31 @@ private final class Fixture {
 private final class FakeMediaFileSystem: RecordingMediaFileSystem {
     var exists: Set<URL> = []
     var directories: Set<URL> = []
-    func createDirectory(at url: URL) throws { directories.insert(url) }
-    func fileExists(at url: URL) -> Bool { exists.contains(url) }
-    func isReadable(at url: URL) -> Bool { exists.contains(url) }
-    func isDirectory(at url: URL) -> Bool { directories.contains(url) }
+    func createDirectory(at url: URL) throws {
+        directories.insert(url)
+    }
+
+    func fileExists(at url: URL) -> Bool {
+        exists.contains(url)
+    }
+
+    func isReadable(at url: URL) -> Bool {
+        exists.contains(url)
+    }
+
+    func isDirectory(at url: URL) -> Bool {
+        directories.contains(url)
+    }
+
     func contentsOfDirectory(at url: URL) throws -> [URL] {
         (Array(exists) + Array(directories)).filter { $0.deletingLastPathComponent() == url }
     }
+
     func moveItem(at source: URL, to destination: URL) throws {
         guard exists.remove(source) != nil else { throw RecordingIssue(code: "filesystem.missing", message: "missing") }
         exists.insert(destination)
     }
+
     func removeItem(at url: URL) throws {
         exists = exists.filter { $0 != url && !$0.path.hasPrefix(url.path + "/") }
         directories = directories.filter { $0 != url && !$0.path.hasPrefix(url.path + "/") }
@@ -189,8 +223,11 @@ private final class FakeMediaWriterFactory: RecordingMediaWriterFactory {
         writers.append(writer)
         return writer
     }
+
     private var fileSystem = FakeMediaFileSystem()
-    func configure(fileSystem: FakeMediaFileSystem) { self.fileSystem = fileSystem }
+    func configure(fileSystem: FakeMediaFileSystem) {
+        self.fileSystem = fileSystem
+    }
 }
 
 private final class FakeMediaWriter: RecordingMediaWriter {
@@ -201,7 +238,8 @@ private final class FakeMediaWriter: RecordingMediaWriter {
     init(url: URL, fileSystem: FakeMediaFileSystem, owner: FakeMediaWriterFactory) {
         self.url = url; self.fileSystem = fileSystem; self.owner = owner
     }
-    func append(_ chunk: MixedAudioChunk) throws {
+
+    func append(_: MixedAudioChunk) throws {
         owner.appendCount += 1
         if owner.failOnAppendNumber == owner.appendCount {
             failed = true
@@ -209,11 +247,19 @@ private final class FakeMediaWriter: RecordingMediaWriter {
         }
         fileSystem.exists.insert(url)
     }
+
     func finish() async throws {
-        if let gate = owner.finishGate { await gate.wait() }
-        if !failed { fileSystem.exists.insert(url) }
+        if let gate = owner.finishGate {
+            await gate.wait()
+        }
+        if !failed {
+            fileSystem.exists.insert(url)
+        }
     }
-    func cancel() { fileSystem.exists.remove(url) }
+
+    func cancel() {
+        fileSystem.exists.remove(url)
+    }
 }
 
 private final class FakeMediaValidator: RecordingMediaValidating {
@@ -228,6 +274,7 @@ private final class FakeMediaValidator: RecordingMediaValidating {
         return 1
     }
 }
+
 private actor AsyncTestGate {
     private var openState = false
     private var enteredState = false

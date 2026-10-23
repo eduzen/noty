@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         Task { @MainActor [weak self] in await self?.controller.bootstrap() }
     }
 
