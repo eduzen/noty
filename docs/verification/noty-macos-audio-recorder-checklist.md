@@ -1,6 +1,6 @@
 # Noty macOS Audio Recorder Manual Verification
 
-Automated checks cannot exercise TCC prompts, ScreenCaptureKit against live applications, sleep/wake, device removal, or a one-hour run. Record the macOS version, Noty build, audio devices, result, and evidence for each case. Do not use protected or confidential meeting content during testing.
+Automated checks cannot exercise TCC prompts, the system audio tap against live applications, sleep/wake, device removal, or a one-hour run. Record the macOS version, Noty build, audio devices, result, and evidence for each case. Do not use protected or confidential meeting content during testing.
 
 ## Developer shortcuts
 
@@ -12,6 +12,8 @@ Automated checks cannot exercise TCC prompts, ScreenCaptureKit against live appl
 - `just test-only AudioTimelineTests` runs one test suite; pass any XCTest suite name.
 - `just check` runs tests, builds the app, and checks unstaged diff whitespace.
 - `just clean` cleans the local Xcode build products.
+- `just setup-signing` creates a local "Noty Local" signing identity and writes `Config/Signing.local.xcconfig`. Run it once (or use an Apple ID, see `Config/Signing.local.xcconfig.example`). Stable signing keeps permissions across rebuilds.
+- `just reset-permissions` clears Noty's Microphone and System Audio Recording privacy decisions. Run it once after switching from ad-hoc signing.
 
 ## Test record
 
@@ -27,14 +29,15 @@ Automated checks cannot exercise TCC prompts, ScreenCaptureKit against live appl
 
 | Status | Scenario | Procedure | Expected result |
 |---|---|---|---|
-| Not run | Signed entitlements | Build the app and inspect its signature with `codesign -d --entitlements :- build/DerivedData/Build/Products/Debug/Noty.app`. | The embedded plist contains App Sandbox, `com.apple.security.device.microphone`, Music Folder read/write, and user-selected files read/write, all enabled. |
-| Not run | Fresh permissions | Reset Noty's Microphone and Screen Recording privacy decisions. Launch Noty without starting a recording, then start one. | No permission prompt at launch. Start requests required access and never reports recording until capture starts. |
-| Not run | Permission denied, then granted | Deny microphone access. Confirm the actionable issue and System Settings action. Grant access in Settings and retry. Repeat for Screen Recording. | No silent recording. Denial is identified by permission type; retry succeeds when permission is available. |
-| Not run | Screen Recording relaunch requirement | Grant Screen Recording when macOS requires the app to relaunch. Retry before relaunch, then quit and reopen Noty. | Noty explains the relaunch requirement, does not start a silent recording, and can record after relaunch. |
-| Not run | Multiple displays | Connect at least two displays, change the primary display, and record system audio plus microphone. | Audio capture starts against the current main-display filter; no video is written. |
-| Not run | Audio-only stream outputs | Record a short system test sound and microphone audio, stop, and repeat. Inspect the output tracks and the capture console. | Both sources are audible, the `.m4a` has no video track, and no `stream output NOT found. Dropping frame` errors appear during capture or shutdown. |
+| Not run | Signed entitlements | Build the app and inspect its signature with `codesign -d --entitlements :- build/DerivedData/Build/Products/Debug/Noty.app`. | The embedded plist contains App Sandbox, `com.apple.security.device.microphone`, Music Folder read/write, and user-selected files read/write, all enabled. No Screen Recording entitlement is needed. |
+| Not run | Stable signature | Run `codesign -dv build/DerivedData/Build/Products/Debug/Noty.app 2>&1 \| grep Authority` after a build. | The authority is `Noty Local` (or your Apple Development certificate), not ad-hoc (`Signature=adhoc`). |
+| Not run | Fresh permissions | Run `just reset-permissions`. Launch Noty without starting a recording, then start one. | No permission prompt at launch. Starting a recording prompts only for Microphone and System Audio Recording Only, and reports recording only after capture starts. |
+| Not run | Permission denied, then granted | Deny microphone access and confirm the actionable issue. Grant it in Settings and retry. Then deny System Audio Recording Only, start a recording, and confirm the issue links to Privacy & Security → System Audio Recording Only. | Microphone denial blocks the start with an actionable issue. System audio denial shows a warning within about 5 seconds and links to the setting; the recording keeps running and is not reported as complete system audio. Granting access and retrying succeeds. |
+| Not run | Rebuild keeps permissions | Grant both permissions, rebuild Noty with the same signing identity, and start a recording. | No new permission prompt; the recording starts with system audio and microphone. |
+| Not run | Output device change | Start recording, then switch the default output device (for example, to headphones). | Recording finalizes once, reports that the output device changed, and reveals any validated partial artifact. |
+| Not run | Audio-only capture | Record a short system test sound and microphone audio, stop, and repeat. Inspect the output tracks and the Console app. | Both sources are audible, the `.m4a` has no video track, and no capture errors appear during capture or shutdown. |
 | Not run | Native microphone PCM | Record with a microphone that supplies signed 16-bit PCM, then play the saved file. | Native microphone samples are converted to Float32 without a capture interruption; microphone audio is audible and not distorted. |
-| Not run | Protected or unavailable audio | Play a protected or otherwise unavailable source while recording. | Noty records only audio that ScreenCaptureKit supplies; it does not claim protected audio was captured. |
+| Not run | Protected or unavailable audio | Play a protected or otherwise unavailable source while recording. | Noty records only audio the system tap supplies; protected audio may arrive silent, and Noty does not claim it was captured. |
 | Not run | Microphone disconnection | Start recording, disconnect or disable the selected microphone, and observe the menu-bar state and output. | Recording finalizes once, reports the microphone interruption, and reveals any validated partial artifact. |
 | Not run | Sleep and wake | Start recording, put the Mac to sleep, then wake it. | Capture interruption finalizes once and surfaces the interruption and any validated partial artifact. |
 | Not run | Folder selection and relaunch | Choose a user folder, record a short clip, quit, relaunch, and record again. Also move or revoke access to the selected folder. | The bookmark survives relaunch; access errors are actionable; the prior valid folder is not silently replaced on a failed selection. |

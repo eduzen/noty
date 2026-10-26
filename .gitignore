@@ -17,6 +17,9 @@ DerivedData/
 !default.perspectivev3
 xcuserdata/
 
+## Local signing identity (per machine; see Config/Signing.local.xcconfig.example)
+Config/Signing.local.xcconfig
+
 ## Other
 *.moved-aside
 *.xccheckout

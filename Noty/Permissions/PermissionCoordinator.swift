@@ -1,5 +1,4 @@
 import AVFoundation
-import CoreGraphics
 import Foundation
 import Security
 
@@ -8,18 +7,14 @@ protocol MicrophonePermissionProviding {
     func requestAccess() async -> Bool
 }
 
-protocol ScreenRecordingPermissionProviding {
-    var isAuthorized: Bool { get }
-    func requestAccess() -> Bool
-}
-
 protocol AudioInputEntitlementProviding {
     var isPresent: Bool { get }
 }
 
+/// Permissions checked before recording. System audio has no public preflight API; its denial is
+/// detected from the tap's output and reported while recording (see `SystemAudioSilenceMonitor`).
 struct PermissionGrant: Equatable, Sendable {
     let microphone: Bool
-    let screenRecording: Bool
 }
 
 struct SystemMicrophonePermissionProvider: MicrophonePermissionProviding {
@@ -29,16 +24,6 @@ struct SystemMicrophonePermissionProvider: MicrophonePermissionProviding {
 
     func requestAccess() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
-    }
-}
-
-struct SystemScreenRecordingPermissionProvider: ScreenRecordingPermissionProviding {
-    var isAuthorized: Bool {
-        CGPreflightScreenCaptureAccess()
-    }
-
-    func requestAccess() -> Bool {
-        CGRequestScreenCaptureAccess()
     }
 }
 
@@ -55,16 +40,13 @@ struct SystemAudioInputEntitlementProvider: AudioInputEntitlementProviding {
 
 struct PermissionCoordinator {
     private let microphone: MicrophonePermissionProviding
-    private let screenRecording: ScreenRecordingPermissionProviding
     private let audioInputEntitlement: AudioInputEntitlementProviding
 
     init(
         microphone: MicrophonePermissionProviding = SystemMicrophonePermissionProvider(),
-        screenRecording: ScreenRecordingPermissionProviding = SystemScreenRecordingPermissionProvider(),
         audioInputEntitlement: AudioInputEntitlementProviding = SystemAudioInputEntitlementProvider()
     ) {
         self.microphone = microphone
-        self.screenRecording = screenRecording
         self.audioInputEntitlement = audioInputEntitlement
     }
 
@@ -104,26 +86,7 @@ struct PermissionCoordinator {
             )
         }
 
-        guard screenRecording.isAuthorized else {
-            if screenRecording.requestAccess() {
-                throw RecordingIssue(
-                    code: "permission.screen-recording-relaunch-required",
-                    message: "Screen Recording access was granted. Quit and reopen Noty before starting a recording.",
-                    recoveryURL: Self.screenRecordingSettingsURL,
-                    isRetryAllowed: false
-                )
-            }
-            throw RecordingIssue(
-                code: "permission.screen-recording-denied",
-                message: """
-                Allow Noty in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.
-                """,
-                recoveryURL: Self.screenRecordingSettingsURL,
-                isRetryAllowed: true
-            )
-        }
-
-        return PermissionGrant(microphone: true, screenRecording: true)
+        return PermissionGrant(microphone: true)
     }
 
     private static func microphoneDenied() -> RecordingIssue {
@@ -139,6 +102,4 @@ struct PermissionCoordinator {
 
     private static let privacySettingsURL =
         URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-    private static let screenRecordingSettingsURL =
-        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 }

@@ -190,6 +190,44 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertFalse(shouldTerminate)
     }
 
+    func testSilentSystemAudioWarnsWithoutStoppingRecording() async throws {
+        let capture = FakeCaptureService()
+        let writer = FakeRecordingWriter()
+        let controller = makeController(capture: capture, writer: writer)
+        await controller.start()
+        XCTAssertEqual(controller.state, .recording)
+
+        // Eight seconds of silent system audio pass the 5-second threshold. The microphone keeps
+        // pace so the mixer's bounded timeline never waits on one source for long. Pacing keeps the
+        // consumer ahead of the three-packet stream buffer, even in debug builds.
+        for second in 0 ..< 8 {
+            let time = TimeInterval(second)
+            capture.emit(packet(source: .system, time: time, frames: 48000, left: 0, right: 0))
+            try await Task.sleep(nanoseconds: 150_000_000)
+            capture.emit(packet(source: .microphone, time: time, frames: 48000, left: 0.2, right: 0.1))
+            try await Task.sleep(nanoseconds: 150_000_000)
+        }
+        let warned = await waitUntil { controller.latestIssue?.code == "capture.system-audio-silent" }
+
+        XCTAssertTrue(warned)
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(controller.latestIssue?.recoveryURL, CaptureSettingsLinks.systemAudio)
+        await controller.stop()
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertNil(controller.latestIssue)
+    }
+
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() >= deadline {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return true
+    }
+
     private func makeController(
         permissions: FakePermissions? = nil,
         destinations: FakeDestinations? = nil,
@@ -245,7 +283,7 @@ private final class FakePermissions: RecordingPermissionPreparing {
         if let issue {
             throw issue
         }
-        return PermissionGrant(microphone: true, screenRecording: true)
+        return PermissionGrant(microphone: true)
     }
 
     func waitUntilEntered() async {

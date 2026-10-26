@@ -1,0 +1,14 @@
+// Copy this file to Config/Signing.local.xcconfig (gitignored) and choose ONE option.
+//
+// Option A: free Apple ID.
+// Xcode > Settings > Accounts > add your Apple ID, then find the Team ID under the
+// Signing & Capabilities tab. Automatic signing creates an "Apple Development" certificate.
+//
+// DEVELOPMENT_TEAM = XXXXXXXXXX
+// CODE_SIGN_STYLE = Automatic
+// CODE_SIGN_IDENTITY = Apple Development
+//
+// Option B: no Apple ID. Create a local self-signed identity with `just setup-signing`.
+//
+// CODE_SIGN_STYLE = Manual
+// CODE_SIGN_IDENTITY = "Noty Local"

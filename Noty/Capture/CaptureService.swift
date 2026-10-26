@@ -9,7 +9,7 @@ protocol CaptureService: AnyObject {
 
 enum CaptureTermination: Equatable, Sendable {
     case userStopped
-    case screenRecordingDenied(RecordingIssue)
+    case systemAudioDenied(RecordingIssue)
     case interrupted(RecordingIssue)
     case microphoneDisconnected(RecordingIssue)
     case unexpected(RecordingIssue)
@@ -19,10 +19,17 @@ enum CaptureTermination: Equatable, Sendable {
 enum CaptureServiceError: Error, Equatable, Sendable {
     case alreadyStarted
     case notStarted
-    case screenRecordingDenied
-    case noMainDisplay
+    case systemAudioDenied
     case microphoneUnavailable
     case invalidAudioFormat
     case queueOverflow
     case streamFailure(String)
+}
+
+/// System Settings deep links for the permissions capture needs.
+enum CaptureSettingsLinks {
+    /// "System Audio Recording Only" (Core Audio taps). Screen Recording is not required.
+    static let systemAudio = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"
+    )
 }

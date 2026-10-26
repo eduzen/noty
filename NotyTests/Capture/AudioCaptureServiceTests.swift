@@ -1,9 +1,8 @@
 import Foundation
 @testable import Noty
-import ScreenCaptureKit
 import XCTest
 
-final class ScreenCaptureServiceTests: XCTestCase {
+final class AudioCaptureServiceTests: XCTestCase {
     func testFakeStartAndStopAreIdempotent() async throws {
         let service = FakeCaptureService()
         try await service.start()
@@ -55,8 +54,8 @@ final class ScreenCaptureServiceTests: XCTestCase {
     }
 
     func testDuplicateStopDoesNotReportAnUnexpectedFailure() async throws {
-        let backend = FakeScreenCaptureBackend()
-        let service = ScreenCaptureService(backend: backend)
+        let backend = FakeAudioBackend()
+        let service = AudioCaptureService(backends: [backend])
         try await service.start()
         await service.stop()
         await service.stop()
@@ -70,8 +69,8 @@ final class ScreenCaptureServiceTests: XCTestCase {
     }
 
     func testPacketBufferOverflowProducesTypedFailure() async throws {
-        let backend = FakeScreenCaptureBackend()
-        let service = ScreenCaptureService(backend: backend)
+        let backend = FakeAudioBackend()
+        let service = AudioCaptureService(backends: [backend])
         try await service.start()
         for index in 0 ..< 4 {
             backend.emit(packet(time: Double(index)))
@@ -93,7 +92,7 @@ final class ScreenCaptureServiceTests: XCTestCase {
 
     func testStopCancelsBackendStartupBeforeCaptureBegins() async throws {
         let backend = SlowStartingBackend()
-        let service = ScreenCaptureService(backend: backend)
+        let service = AudioCaptureService(backends: [backend])
         let startTask = Task { try await service.start() }
         await fulfillment(of: [backend.startEntered], timeout: 1)
 
@@ -111,8 +110,8 @@ final class ScreenCaptureServiceTests: XCTestCase {
     }
 
     func testStreamFailureProducesTypedTermination() async throws {
-        let backend = FakeScreenCaptureBackend()
-        let service = ScreenCaptureService(backend: backend)
+        let backend = FakeAudioBackend()
+        let service = AudioCaptureService(backends: [backend])
         try await service.start()
         backend.terminate(.microphoneDisconnected(RecordingIssue(code: "capture.mic", message: "disconnected")))
         var events: [CaptureTermination] = []
@@ -122,17 +121,62 @@ final class ScreenCaptureServiceTests: XCTestCase {
         XCTAssertEqual(events, [.microphoneDisconnected(RecordingIssue(code: "capture.mic", message: "disconnected"))])
     }
 
-    func testScreenCaptureErrorMapping() {
-        let denied = ScreenCaptureError.map(NSError(domain: SCStreamErrorDomain, code: -3801))
-        XCTAssertEqual(denied.kind, .permissionDenied)
-        XCTAssertEqual(denied.issue.code, "capture.screen-recording-denied")
+    func testFailureFromEitherSourceEndsTheSessionAndStopsBothBackends() async throws {
+        let system = FakeAudioBackend()
+        let microphone = FakeAudioBackend()
+        let service = AudioCaptureService(backends: [system, microphone])
+        try await service.start()
 
-        let interrupted = ScreenCaptureError.map(NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError))
-        XCTAssertEqual(interrupted.kind, .interrupted)
+        microphone.terminate(.microphoneDisconnected(RecordingIssue(code: "capture.mic", message: "disconnected")))
+        var events: [CaptureTermination] = []
+        for await event in service.terminations {
+            events.append(event)
+        }
+        // stop() waits for the shared backend shutdown started by the failure.
+        await service.stop()
 
-        let unexpected = ScreenCaptureError.map(NSError(domain: "test", code: 42))
-        XCTAssertEqual(unexpected.kind, .unexpected)
-        XCTAssertEqual(unexpected.issue.code, "capture.stream-failed")
+        XCTAssertEqual(events, [.microphoneDisconnected(RecordingIssue(code: "capture.mic", message: "disconnected"))])
+        XCTAssertEqual(system.stopCount, 1)
+        XCTAssertEqual(microphone.stopCount, 1)
+    }
+
+    func testFailedSecondBackendStopsTheFirstAndReportsTheError() async {
+        let system = FakeAudioBackend()
+        let microphone = FakeAudioBackend(startError: CaptureServiceError.microphoneUnavailable)
+        let service = AudioCaptureService(backends: [system, microphone])
+
+        do {
+            try await service.start()
+            XCTFail("Expected microphone startup failure")
+        } catch let error as CaptureServiceError {
+            XCTAssertEqual(error, .microphoneUnavailable)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(system.startCount, 1)
+        XCTAssertEqual(system.stopCount, 1)
+    }
+
+    func testDeniedSystemAudioProducesActionableTermination() async {
+        let backend = FakeAudioBackend(startError: CaptureServiceError.systemAudioDenied)
+        let service = AudioCaptureService(backends: [backend])
+        do {
+            try await service.start()
+            XCTFail("Expected system audio denial")
+        } catch {
+            // The termination stream carries the actionable issue.
+        }
+
+        var events: [CaptureTermination] = []
+        for await event in service.terminations {
+            events.append(event)
+        }
+        guard case let .systemAudioDenied(issue)? = events.first else {
+            return XCTFail("Expected systemAudioDenied, got \(events)")
+        }
+        XCTAssertEqual(issue.code, "capture.system-audio-denied")
+        XCTAssertEqual(issue.recoveryURL, CaptureSettingsLinks.systemAudio)
+        XCTAssertTrue(issue.message.contains("System Audio Recording Only"))
     }
 
     private func packet(time: TimeInterval) -> CapturedAudioPacket {
@@ -147,11 +191,16 @@ final class ScreenCaptureServiceTests: XCTestCase {
     }
 }
 
-private final class FakeScreenCaptureBackend: ScreenCaptureBackend {
+private final class FakeAudioBackend: AudioCaptureBackend {
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private let startError: Error?
     private var terminationHandler: ((CaptureTermination) -> Void)?
     private var packetHandler: ((CapturedAudioPacket) -> Void)?
+
+    init(startError: Error? = nil) {
+        self.startError = startError
+    }
 
     func start(
         onPacket: @escaping (CapturedAudioPacket) -> Void,
@@ -160,6 +209,9 @@ private final class FakeScreenCaptureBackend: ScreenCaptureBackend {
         startCount += 1
         packetHandler = onPacket
         terminationHandler = onTermination
+        if let startError {
+            throw startError
+        }
     }
 
     func stop() async {
@@ -175,7 +227,7 @@ private final class FakeScreenCaptureBackend: ScreenCaptureBackend {
     }
 }
 
-private final class SlowStartingBackend: ScreenCaptureBackend {
+private final class SlowStartingBackend: AudioCaptureBackend {
     let startEntered = XCTestExpectation(description: "backend start entered")
     private(set) var captureStartCount = 0
     private(set) var stopCount = 0

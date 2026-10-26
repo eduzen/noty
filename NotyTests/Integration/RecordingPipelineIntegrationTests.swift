@@ -117,7 +117,7 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
 @MainActor
 private struct IntegrationPermissions: RecordingPermissionPreparing {
     func prepareForRecording() async throws -> PermissionGrant {
-        PermissionGrant(microphone: true, screenRecording: true)
+        PermissionGrant(microphone: true)
     }
 }
 

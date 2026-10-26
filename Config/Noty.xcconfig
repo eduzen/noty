@@ -1,0 +1,10 @@
+// Signing defaults for the Noty app target.
+//
+// macOS ties Privacy grants (System Audio Recording Only, Microphone) to the app's
+// code signature. Ad-hoc signing ("-") changes on every build, so grants are lost.
+// Machine-specific identities belong in Config/Signing.local.xcconfig (gitignored).
+// Run `just setup-signing` or copy Config/Signing.local.xcconfig.example.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+
+#include? "Signing.local.xcconfig"

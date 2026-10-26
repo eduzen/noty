@@ -19,6 +19,7 @@
 /* Begin PBXFileReference section */
 		A10000000000000000000032 /* Noty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Noty.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000033 /* NotyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000090 /* Config/Noty.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Noty.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -59,6 +60,7 @@
 			children = (
 				A10000000000000000000001 /* Noty */,
 				A10000000000000000000002 /* NotyTests */,
+				A10000000000000000000090 /* Config/Noty.xcconfig */,
 				A10000000000000000000031 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -287,10 +289,9 @@
 		};
 		A10000000000000000000072 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000090 /* Config/Noty.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Noty/Resources/Noty.entitlements;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
@@ -308,10 +309,9 @@
 		};
 		A10000000000000000000073 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000090 /* Config/Noty.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Noty/Resources/Noty.entitlements;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;

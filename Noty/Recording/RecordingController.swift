@@ -61,7 +61,7 @@ final class RecordingController: ObservableObject {
     init(
         permissions: any RecordingPermissionPreparing = PermissionCoordinator(),
         destinations: any RecordingDestinationManaging = RecordingDestinationStore(),
-        captureFactory: @escaping CaptureFactory = { ScreenCaptureService() },
+        captureFactory: @escaping CaptureFactory = { AudioCaptureService() },
         writerFactory: @escaping WriterFactory = { RecordingWriter() },
         recoveryDiscovery: @escaping RecoveryDiscovery = { folder in
             await RecoverySegmentStore.discoverOrphanedArtifacts(
@@ -292,8 +292,12 @@ final class RecordingController: ObservableObject {
         writer: any RecordingWriting
     ) async -> AudioMixer {
         var mixer = AudioMixer()
+        var silenceMonitor = SystemAudioSilenceMonitor()
         do {
             for try await packet in packets {
+                if silenceMonitor.observe(packet) {
+                    await reportSilentSystemAudio()
+                }
                 let normalized = try AudioNormalizer().normalize(packet)
                 for chunk in try mixer.append(normalized) {
                     try await writer.append(chunk)
@@ -304,6 +308,21 @@ final class RecordingController: ObservableObject {
             await captureEnded(error: error)
         }
         return mixer
+    }
+
+    /// Warns, but keeps recording: silence may also mean nothing is playing.
+    private func reportSilentSystemAudio() {
+        guard state == .recording, latestIssue == nil else { return }
+        latestIssue = RecordingIssue(
+            code: "capture.system-audio-silent",
+            message: """
+            No system audio has been detected for \(Int(SystemAudioSilenceMonitor.threshold)) seconds. \
+            If something is playing, allow Noty under System Settings → Privacy & Security \
+            → System Audio Recording Only.
+            """,
+            recoveryURL: CaptureSettingsLinks.systemAudio,
+            isRetryAllowed: true
+        )
     }
 
     private func captureEnded(error: Error? = nil) {
@@ -335,7 +354,7 @@ final class RecordingController: ObservableObject {
                     message: "Audio capture stopped unexpectedly.",
                     isRetryAllowed: true
                 )
-            case let .screenRecordingDenied(value), let .interrupted(value), let .microphoneDisconnected(value),
+            case let .systemAudioDenied(value), let .interrupted(value), let .microphoneDisconnected(value),
                  let .unexpected(value),
                  let .queueOverflow(value):
                 issue = value
@@ -477,7 +496,7 @@ final class RecordingController: ObservableObject {
     }
 
     private func terminalState(for issue: RecordingIssue) -> RecordingState {
-        issue.code.hasPrefix("capture.") || issue.code.hasPrefix("permission.screen-recording") ? .interrupted : .failed
+        issue.code.hasPrefix("capture.") ? .interrupted : .failed
     }
 
     private func issue(from error: Error) -> RecordingIssue {
@@ -515,17 +534,10 @@ final class RecordingController: ObservableObject {
         }
         if let error = error as? CaptureServiceError {
             switch error {
-            case .screenRecordingDenied: return RecordingIssue(
-                    code: "capture.screen-recording-denied",
-                    message: "Screen Recording permission is required.",
-                    recoveryURL: URL(
-                        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-                    ),
-                    isRetryAllowed: true
-                )
-            case .noMainDisplay: return RecordingIssue(
-                    code: "capture.main-display-unavailable",
-                    message: "Noty could not resolve the main display for audio capture.",
+            case .systemAudioDenied: return RecordingIssue(
+                    code: "capture.system-audio-denied",
+                    message: "Allow Noty under System Audio Recording Only, then try again.",
+                    recoveryURL: CaptureSettingsLinks.systemAudio,
                     isRetryAllowed: true
                 )
             case .microphoneUnavailable: return RecordingIssue(
@@ -535,7 +547,7 @@ final class RecordingController: ObservableObject {
                 )
             case .invalidAudioFormat: return RecordingIssue(
                     code: "capture.invalid-audio",
-                    message: "ScreenCaptureKit returned an unsupported audio format.",
+                    message: "Audio capture returned an unsupported audio format.",
                     isRetryAllowed: false
                 )
             case .queueOverflow: return RecordingIssue(
