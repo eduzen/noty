@@ -13,6 +13,12 @@ protocol AudioCaptureBackend: AnyObject {
 /// Runs every backend as one capture session. If any source fails, the whole recording ends,
 /// so a recording never silently continues with only one source.
 final class AudioCaptureService: CaptureService {
+    private struct StopState {
+        let shouldFinish: Bool
+        let shouldStopBackends: Bool
+        let startupTask: Task<Void, Error>?
+    }
+
     let packets: AsyncThrowingStream<CapturedAudioPacket, Error>
     let terminations: AsyncStream<CaptureTermination>
 
@@ -44,18 +50,7 @@ final class AudioCaptureService: CaptureService {
             let task = Task { [weak self] in
                 guard let self else { return }
                 let onPacket: (CapturedAudioPacket) -> Void = { [weak self] packet in
-                    guard let self else { return }
-                    switch packetContinuation.yield(packet) {
-                    case .enqueued: break
-                    case .dropped:
-                        terminate(with: .queueOverflow(RecordingIssue(
-                            code: "capture.queue-overflow",
-                            message: "Audio capture exceeded its bounded buffer.",
-                            isRetryAllowed: false
-                        )))
-                    case .terminated: break
-                    @unknown default: break
-                    }
+                    self?.enqueue(packet)
                 }
                 let onTermination: (CaptureTermination) -> Void = { [weak self] termination in
                     self?.terminate(with: termination)
@@ -89,11 +84,10 @@ final class AudioCaptureService: CaptureService {
     }
 
     func stop() async {
-        let state: (shouldFinish: Bool, shouldStopBackends: Bool, startupTask: Task<Void, Error>?) = withLock {
-            let shouldFinish = !stopped
-            let shouldStopBackends = started
+        let state = withLock {
+            let state = StopState(shouldFinish: !stopped, shouldStopBackends: started, startupTask: startupTask)
             stopped = true
-            return (shouldFinish, shouldStopBackends, startupTask)
+            return state
         }
         state.startupTask?.cancel()
         if state.shouldStopBackends {
@@ -106,6 +100,21 @@ final class AudioCaptureService: CaptureService {
         packetContinuation.finish()
         terminationContinuation.yield(.userStopped)
         terminationContinuation.finish()
+    }
+
+    private func enqueue(_ packet: CapturedAudioPacket) {
+        switch packetContinuation.yield(packet) {
+        case .enqueued, .terminated:
+            break
+        case .dropped:
+            terminate(with: .queueOverflow(RecordingIssue(
+                code: "capture.queue-overflow",
+                message: "Audio capture exceeded its bounded buffer.",
+                isRetryAllowed: false
+            )))
+        @unknown default:
+            break
+        }
     }
 
     private func stopBackendsOnce() async {
@@ -127,17 +136,17 @@ final class AudioCaptureService: CaptureService {
 
     private func terminate(with termination: CaptureTermination) {
         let state = withLock {
-            let shouldFinish = !stopped
+            let state = (shouldFinish: !stopped, startupTask: startupTask)
             stopped = true
-            return (shouldFinish, startupTask)
+            return state
         }
-        guard state.0 else { return }
-        state.1?.cancel()
+        guard state.shouldFinish else { return }
+        state.startupTask?.cancel()
         packetContinuation.finish(throwing: Self.error(for: termination))
         terminationContinuation.yield(termination)
         terminationContinuation.finish()
         Task {
-            if let startupTask = state.1 {
+            if let startupTask = state.startupTask {
                 _ = try? await startupTask.value
             }
             await stopBackendsOnce()

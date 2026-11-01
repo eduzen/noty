@@ -94,7 +94,7 @@ struct OpenRecordingDestinationPanel: RecordingDestinationPanel {
     }
 }
 
-final class UserDefaultsRecordingDestinationBookmarkStore: RecordingDestinationBookmarkStore {
+final class UserDefaultsBookmarkStore: RecordingDestinationBookmarkStore {
     private let defaults: UserDefaults
     private let key: String
 
@@ -143,7 +143,7 @@ struct RecordingDestinationStore {
         bookmarks: RecordingBookmarkProviding = SecurityScopedBookmarkProvider(),
         fileSystem: RecordingDestinationFileSystem = LocalRecordingDestinationFileSystem(),
         panel: RecordingDestinationPanel = OpenRecordingDestinationPanel(),
-        bookmarkStore: RecordingDestinationBookmarkStore = UserDefaultsRecordingDestinationBookmarkStore(),
+        bookmarkStore: RecordingDestinationBookmarkStore = UserDefaultsBookmarkStore(),
         defaultDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
             "Music/Noty",
             isDirectory: true
@@ -216,26 +216,29 @@ struct RecordingDestinationStore {
                 "Noty could not obtain access to this folder. Choose it again and approve access when prompted."
             )
         }
+        var releaseOnExit = acquiredScope
+        defer {
+            if releaseOnExit {
+                fileSystem.stopAccessing(url)
+            }
+        }
+
         do {
             try fileSystem.verifyWritable(url)
-            return DestinationLease(
-                url: url,
-                releaseAccess: acquiredScope ? { [fileSystem] in fileSystem.stopAccessing(url) } : nil
-            )
         } catch let issue as RecordingIssue {
-            if acquiredScope {
-                fileSystem.stopAccessing(url)
-            }
             throw issue
         } catch {
-            if acquiredScope {
-                fileSystem.stopAccessing(url)
-            }
             throw Self.issue(
                 "destination-inaccessible",
                 "Noty cannot access this recording folder. Restore access or choose another folder."
             )
         }
+
+        releaseOnExit = false
+        return DestinationLease(
+            url: url,
+            releaseAccess: acquiredScope ? { [fileSystem] in fileSystem.stopAccessing(url) } : nil
+        )
     }
 
     fileprivate static func issue(_ code: String, _ message: String) -> RecordingIssue {

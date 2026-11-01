@@ -184,7 +184,9 @@ final class RecordingController: ObservableObject {
         guard let lastArtifact else { return }
         NSWorkspace.shared.activateFileViewerSelecting([lastArtifact.url])
     }
+}
 
+extension RecordingController {
     private func startOperation() async {
         do {
             _ = try await permissions.prepareForRecording()
@@ -500,73 +502,6 @@ final class RecordingController: ObservableObject {
     }
 
     private func issue(from error: Error) -> RecordingIssue {
-        if let issue = error as? RecordingIssue {
-            return issue
-        }
-        if let error = error as? AudioPipelineError {
-            switch error {
-            case let .malformedPacket(message): return RecordingIssue(
-                    code: "audio.malformed-packet",
-                    message: message,
-                    isRetryAllowed: true
-                )
-            case let .unsupportedFormat(message): return RecordingIssue(
-                    code: "audio.unsupported-format",
-                    message: message,
-                    isRetryAllowed: true
-                )
-            case let .conversionFailed(message): return RecordingIssue(
-                    code: "audio.conversion-failed",
-                    message: message,
-                    isRetryAllowed: true
-                )
-            case let .timingDiscontinuity(message): return RecordingIssue(
-                    code: "audio.timing-discontinuity",
-                    message: message,
-                    isRetryAllowed: false
-                )
-            case .queueOverflow: return RecordingIssue(
-                    code: "audio.queue-overflow",
-                    message: "Audio processing exceeded its bounded buffer.",
-                    isRetryAllowed: false
-                )
-            }
-        }
-        if let error = error as? CaptureServiceError {
-            switch error {
-            case .systemAudioDenied: return RecordingIssue(
-                    code: "capture.system-audio-denied",
-                    message: "Allow Noty under System Audio Recording Only, then try again.",
-                    recoveryURL: CaptureSettingsLinks.systemAudio,
-                    isRetryAllowed: true
-                )
-            case .microphoneUnavailable: return RecordingIssue(
-                    code: "capture.microphone-unavailable",
-                    message: "No default microphone is available.",
-                    isRetryAllowed: true
-                )
-            case .invalidAudioFormat: return RecordingIssue(
-                    code: "capture.invalid-audio",
-                    message: "Audio capture returned an unsupported audio format.",
-                    isRetryAllowed: false
-                )
-            case .queueOverflow: return RecordingIssue(
-                    code: "capture.queue-overflow",
-                    message: "Audio capture exceeded its bounded buffer.",
-                    isRetryAllowed: false
-                )
-            case let .streamFailure(message): return RecordingIssue(
-                    code: "capture.stream-failed",
-                    message: message,
-                    isRetryAllowed: true
-                )
-            case .alreadyStarted, .notStarted: return RecordingIssue(
-                    code: "capture.lifecycle-error",
-                    message: error.localizedDescription,
-                    isRetryAllowed: true
-                )
-            }
-        }
-        return RecordingIssue(code: "recording.failed", message: error.localizedDescription, isRetryAllowed: true)
+        RecordingIssueMapper.issue(from: error)
     }
 }

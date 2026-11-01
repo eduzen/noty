@@ -3,6 +3,13 @@ import CoreMedia
 import Foundation
 
 extension CapturedAudioPacket {
+    private struct FormatDetails {
+        let channels: Int
+        let isFloat32: Bool
+        let bytesPerSample: Int
+        let bytesPerFrame: Int
+    }
+
     /// Largest packet accepted from a capture callback, in bytes of Float32 samples.
     private static let maximumPacketBytes = 64 * 1024 * 1024 / 5
 
@@ -65,6 +72,24 @@ extension CapturedAudioPacket {
         source: AudioSource,
         presentationTime: TimeInterval
     ) throws -> CapturedAudioPacket {
+        let details = try formatDetails(for: format, presentationTime: presentationTime)
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
+        let frames = try validateBuffers(buffers, details: details, sampleRate: format.mSampleRate)
+        let samples = copySamples(from: buffers, frames: frames, details: details)
+        return CapturedAudioPacket(
+            source: source,
+            presentationTime: presentationTime,
+            sampleRate: format.mSampleRate,
+            channelCount: details.channels,
+            frameCount: frames,
+            samples: samples
+        )
+    }
+
+    private static func formatDetails(
+        for format: AudioStreamBasicDescription,
+        presentationTime: TimeInterval
+    ) throws -> FormatDetails {
         guard format.mFormatID == kAudioFormatLinearPCM,
               format.mFormatFlags & kAudioFormatFlagIsBigEndian == 0,
               format.mSampleRate.isFinite,
@@ -80,28 +105,39 @@ extension CapturedAudioPacket {
         let channels = Int(format.mChannelsPerFrame)
         guard channels > 0, channels <= 8 else { throw CaptureServiceError.invalidAudioFormat }
         let isNonInterleaved = format.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
-        // Non-interleaved buffers hold one channel each, so each frame is one sample per buffer.
         let bytesPerFrame = isNonInterleaved ? bytesPerSample : channels * bytesPerSample
         guard format.mBytesPerFrame == UInt32(bytesPerFrame) else { throw CaptureServiceError.invalidAudioFormat }
+        return FormatDetails(
+            channels: channels,
+            isFloat32: isFloat32,
+            bytesPerSample: bytesPerSample,
+            bytesPerFrame: bytesPerFrame
+        )
+    }
 
-        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
+    private static func validateBuffers(
+        _ buffers: UnsafeMutableAudioBufferListPointer,
+        details: FormatDetails,
+        sampleRate: Double
+    ) throws -> Int {
         guard let first = buffers.first, first.mDataByteSize > 0 else {
             throw CaptureServiceError.invalidAudioFormat
         }
-        let frames = Int(first.mDataByteSize) / bytesPerFrame
+        let frames = Int(first.mDataByteSize) / details.bytesPerFrame
         guard frames > 0 else { throw CaptureServiceError.invalidAudioFormat }
-        let sampleCount = frames * channels
+        let sampleCount = frames * details.channels
         guard sampleCount * MemoryLayout<Float>.size <= maximumPacketBytes,
-              Double(frames) / format.mSampleRate <= 1.0
+              Double(frames) / sampleRate <= 1.0
         else { throw CaptureServiceError.queueOverflow }
 
-        let bytesPerPlane = frames * bytesPerSample
-        if buffers.count == 1, buffers[0].mNumberChannels == UInt32(channels) {
-            guard Int(buffers[0].mDataByteSize) >= sampleCount * bytesPerSample, buffers[0].mData != nil else {
+        let bytesPerPlane = frames * details.bytesPerSample
+        if buffers.count == 1, buffers[0].mNumberChannels == UInt32(details.channels) {
+            guard Int(buffers[0].mDataByteSize) >= sampleCount * details.bytesPerSample,
+                  buffers[0].mData != nil else {
                 throw CaptureServiceError.invalidAudioFormat
             }
         } else {
-            guard buffers.count == channels,
+            guard buffers.count == details.channels,
                   buffers.allSatisfy({ buffer in
                       buffer.mNumberChannels == 1 && Int(buffer.mDataByteSize) >= bytesPerPlane && buffer.mData != nil
                   })
@@ -109,10 +145,18 @@ extension CapturedAudioPacket {
                 throw CaptureServiceError.invalidAudioFormat
             }
         }
+        return frames
+    }
 
+    private static func copySamples(
+        from buffers: UnsafeMutableAudioBufferListPointer,
+        frames: Int,
+        details: FormatDetails
+    ) -> [Float] {
+        let sampleCount = frames * details.channels
         var samples = [Float]()
         samples.reserveCapacity(sampleCount)
-        if isFloat32 {
+        if details.isFloat32 {
             if buffers.count == 1 {
                 let data = buffers[0].mData!.assumingMemoryBound(to: Float.self)
                 samples.append(contentsOf: UnsafeBufferPointer(start: data, count: sampleCount))
@@ -137,14 +181,6 @@ extension CapturedAudioPacket {
                 }
             }
         }
-
-        return CapturedAudioPacket(
-            source: source,
-            presentationTime: presentationTime,
-            sampleRate: format.mSampleRate,
-            channelCount: channels,
-            frameCount: frames,
-            samples: samples
-        )
+        return samples
     }
 }

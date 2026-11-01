@@ -22,20 +22,12 @@ struct AudioTimeline: Sendable {
     }
 
     mutating func append(_ packet: NormalizedAudioPacket) throws -> [MixedAudioChunk] {
-        guard packet.presentationTime.isFinite, packet.presentationTime >= 0,
-              packet.frameCount > 0, packet.frameCount <= Int.max / AudioFormat.channelCount,
-              packet.samples.count == packet.frameCount * AudioFormat.channelCount,
-              packet.samples.allSatisfy(\.isFinite)
-        else {
-            throw AudioPipelineError.malformedPacket("Normalized packet has invalid timing or sample count.")
-        }
-
+        let packetEnd = try validatedEnd(of: packet)
         if origin == nil {
             origin = packet.presentationTime
             outputOrigin = packet.presentationTime
         }
         let timelineOrigin = packet.isDiscontinuity && latestEnd != nil ? packet.presentationTime : origin!
-        let packetEnd = packet.presentationTime + Double(packet.frameCount) / AudioFormat.sampleRate
         let relativeFrame = (packet.presentationTime - timelineOrigin) * AudioFormat.sampleRate
         let relativeEndFrame = (packetEnd - timelineOrigin) * AudioFormat.sampleRate
         guard packetEnd.isFinite, relativeFrame.isFinite, relativeEndFrame.isFinite,
@@ -63,26 +55,10 @@ struct AudioTimeline: Sendable {
         }
         guard frame(at: packetEnd) > cursorFrame else { return chunks }
 
-        let packetBytes = packet.samples.count * MemoryLayout<Float>.size
-        let nextBytes = pendingBytes.addingReportingOverflow(packetBytes)
-        var pendingStart = packet.presentationTime
-        var pendingEnd = packetEnd
-        for buffered in pending {
-            pendingStart = min(pendingStart, buffered.presentationTime)
-            pendingEnd = max(
-                pendingEnd,
-                buffered.presentationTime + Double(buffered.frameCount) / AudioFormat.sampleRate
-            )
-        }
-        let pendingDuration = (pendingEnd - pendingStart) * AudioFormat.sampleRate
-        guard !nextBytes.overflow, nextBytes.partialValue <= Self.maximumBufferedBytes,
-              pendingDuration.isFinite, pendingDuration <= Double(Self.maximumBufferedFrames)
-        else {
-            throw AudioPipelineError.queueOverflow
-        }
+        let nextBytes = try pendingByteCount(after: packet, endingAt: packetEnd)
         latestEnd = max(latestEnd ?? packetEnd, packetEnd)
         pending.append(packet)
-        pendingBytes = nextBytes.partialValue
+        pendingBytes = nextBytes
         pending.sort(by: Self.packetOrder)
         let watermark = max(origin!, latestEnd! - reorderWindow)
         try chunks.append(contentsOf: render(through: frame(at: watermark)))
@@ -101,6 +77,38 @@ struct AudioTimeline: Sendable {
         }
         pending.sort(by: Self.packetOrder)
         return try render(through: frame(at: finalEnd))
+    }
+
+    private func pendingByteCount(after packet: NormalizedAudioPacket, endingAt packetEnd: TimeInterval) throws -> Int {
+        let packetBytes = packet.samples.count * MemoryLayout<Float>.size
+        let nextBytes = pendingBytes.addingReportingOverflow(packetBytes)
+        var pendingStart = packet.presentationTime
+        var pendingEnd = packetEnd
+        for buffered in pending {
+            pendingStart = min(pendingStart, buffered.presentationTime)
+            pendingEnd = max(
+                pendingEnd,
+                buffered.presentationTime + Double(buffered.frameCount) / AudioFormat.sampleRate
+            )
+        }
+        let pendingDuration = (pendingEnd - pendingStart) * AudioFormat.sampleRate
+        guard !nextBytes.overflow, nextBytes.partialValue <= Self.maximumBufferedBytes,
+              pendingDuration.isFinite, pendingDuration <= Double(Self.maximumBufferedFrames)
+        else {
+            throw AudioPipelineError.queueOverflow
+        }
+        return nextBytes.partialValue
+    }
+
+    private func validatedEnd(of packet: NormalizedAudioPacket) throws -> TimeInterval {
+        guard packet.presentationTime.isFinite, packet.presentationTime >= 0,
+              packet.frameCount > 0, packet.frameCount <= Int.max / AudioFormat.channelCount,
+              packet.samples.count == packet.frameCount * AudioFormat.channelCount,
+              packet.samples.allSatisfy(\.isFinite)
+        else {
+            throw AudioPipelineError.malformedPacket("Normalized packet has invalid timing or sample count.")
+        }
+        return packet.presentationTime + Double(packet.frameCount) / AudioFormat.sampleRate
     }
 
     private static func packetOrder(_ lhs: NormalizedAudioPacket, _ rhs: NormalizedAudioPacket) -> Bool {

@@ -3,6 +3,15 @@ import Foundation
 
 struct AudioNormalizer {
     func normalize(_ packet: CapturedAudioPacket) throws -> NormalizedAudioPacket {
+        try validate(packet)
+        let (sourceFormat, outputFormat) = try makeFormats(for: packet.sampleRate)
+        let input = try makeInputBuffer(for: packet, format: sourceFormat)
+        let output = try convert(input, from: sourceFormat, to: outputFormat)
+        return try makePacket(from: output, source: packet.source, presentationTime: packet.presentationTime,
+                              isDiscontinuity: packet.isDiscontinuity)
+    }
+
+    private func validate(_ packet: CapturedAudioPacket) throws {
         guard packet.presentationTime.isFinite, packet.presentationTime >= 0,
               packet.sampleRate.isFinite, packet.sampleRate > 0,
               (1 ... 32).contains(packet.channelCount), packet.frameCount > 0,
@@ -16,22 +25,24 @@ struct AudioNormalizer {
             throw AudioPipelineError
                 .malformedPacket("Audio packet has invalid timing, format, frame count, or samples.")
         }
-        guard let sourceFormat = AVAudioFormat(
-                  commonFormat: .pcmFormatFloat32,
-                  sampleRate: packet.sampleRate,
-                  channels: 2,
-                  interleaved: false
-              ),
-              let outputFormat = AVAudioFormat(
-                  commonFormat: .pcmFormatFloat32,
-                  sampleRate: AudioFormat.sampleRate,
-                  channels: 2,
-                  interleaved: false
-              ),
-              let input = AVAudioPCMBuffer(
-                  pcmFormat: sourceFormat,
-                  frameCapacity: AVAudioFrameCount(packet.frameCount)
-              ),
+    }
+
+    private func makeFormats(for sampleRate: Double) throws -> (AVAudioFormat, AVAudioFormat) {
+        guard let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                         channels: 2, interleaved: false),
+            let output = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioFormat.sampleRate,
+                                       channels: 2, interleaved: false)
+        else {
+            throw AudioPipelineError.unsupportedFormat("Could not create a supported Float32 audio format.")
+        }
+        return (source, output)
+    }
+
+    private func makeInputBuffer(
+        for packet: CapturedAudioPacket,
+        format: AVAudioFormat
+    ) throws -> AVAudioPCMBuffer {
+        guard let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(packet.frameCount)),
               let left = input.floatChannelData?[0], let right = input.floatChannelData?[1]
         else {
             throw AudioPipelineError.unsupportedFormat("Could not create a supported Float32 audio format.")
@@ -43,16 +54,26 @@ struct AudioNormalizer {
             left[frame] = packet.samples[frame * packet.channelCount]
             right[frame] = packet.channelCount == 1 ? left[frame] : packet.samples[frame * packet.channelCount + 1]
         }
+        return input
+    }
+
+    private func convert(
+        _ input: AVAudioPCMBuffer,
+        from sourceFormat: AVAudioFormat,
+        to outputFormat: AVAudioFormat
+    ) throws -> AVAudioPCMBuffer {
         guard let converter = AVAudioConverter(from: sourceFormat, to: outputFormat) else {
             throw AudioPipelineError.unsupportedFormat("Could not create an audio sample-rate converter.")
         }
-        let requiredFrames = ceil(Double(packet.frameCount) * AudioFormat.sampleRate / packet.sampleRate) + 128
+        let requiredFrames = ceil(Double(input.frameLength) * AudioFormat.sampleRate / sourceFormat.sampleRate) + 128
         guard requiredFrames.isFinite, requiredFrames > 0, requiredFrames <= Double(AVAudioFrameCount.max) else {
             throw AudioPipelineError
                 .unsupportedFormat("The source sample rate requires an unsupported conversion buffer.")
         }
-        let capacity = AVAudioFrameCount(requiredFrames)
-        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+        guard let output = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: AVAudioFrameCount(requiredFrames)
+        ) else {
             throw AudioPipelineError.conversionFailed("Could not allocate converted audio buffer.")
         }
         var suppliedInput = false
@@ -67,27 +88,32 @@ struct AudioNormalizer {
             return input
         }
         guard conversionError == nil, status != .error,
-              let convertedLeft = output.floatChannelData?[0], let convertedRight = output.floatChannelData?[1]
-        else {
+              output.floatChannelData?[0] != nil, output.floatChannelData?[1] != nil else {
             throw AudioPipelineError
                 .conversionFailed(conversionError?.localizedDescription ?? "Audio sample-rate conversion failed.")
         }
+        return output
+    }
 
+    private func makePacket(
+        from output: AVAudioPCMBuffer,
+        source: AudioSource,
+        presentationTime: TimeInterval,
+        isDiscontinuity: Bool
+    ) throws -> NormalizedAudioPacket {
+        guard let left = output.floatChannelData?[0], let right = output.floatChannelData?[1] else {
+            throw AudioPipelineError.conversionFailed("Audio sample-rate conversion produced no channels.")
+        }
         let frames = Int(output.frameLength)
         guard frames > 0 else {
             throw AudioPipelineError.conversionFailed("Audio sample-rate conversion produced no frames.")
         }
         var samples = [Float](repeating: 0, count: frames * AudioFormat.channelCount)
         for frame in 0 ..< frames {
-            samples[frame * 2] = convertedLeft[frame]
-            samples[frame * 2 + 1] = convertedRight[frame]
+            samples[frame * 2] = left[frame]
+            samples[frame * 2 + 1] = right[frame]
         }
-        return NormalizedAudioPacket(
-            source: packet.source,
-            presentationTime: packet.presentationTime,
-            frameCount: frames,
-            samples: samples,
-            isDiscontinuity: packet.isDiscontinuity
-        )
+        return NormalizedAudioPacket(source: source, presentationTime: presentationTime, frameCount: frames,
+                                     samples: samples, isDiscontinuity: isDiscontinuity)
     }
 }
