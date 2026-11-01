@@ -70,23 +70,18 @@ final class SystemAudioTapBackend: AudioCaptureBackend {
         // The default mute behavior is unmuted, so system audio keeps playing while it is recorded.
         tapDescription.isPrivate = true
 
-        var newTap = Self.unknownObject
-        // Tap creation fails when the user has not allowed System Audio Recording Only.
-        guard AudioHardwareCreateProcessTap(tapDescription, &newTap) == noErr else {
-            throw CaptureServiceError.systemAudioDenied
-        }
-        tapID = newTap
+        tapID = try Self.createProcessTap(tapDescription)
         format = try Self.tapFormat(tapID)
 
-        let outputUID = try Self.defaultOutputDeviceUID()
+        // Physical output devices can also have inputs (for example, a USB audio interface).
+        // Adding one as a subdevice would prepend its input buffers to the tap's stereo buffer.
+        // This aggregate must expose only the system tap; the microphone is captured separately.
         let aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Noty System Audio",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[
                 kAudioSubTapDriftCompensationKey: true,
                 kAudioSubTapUIDKey: tapDescription.uuid.uuidString
@@ -221,6 +216,16 @@ final class SystemAudioTapBackend: AudioCaptureBackend {
 
     // MARK: - Core Audio property helpers
 
+    static func createProcessTap(
+        _ description: CATapDescription,
+        using create: (CATapDescription, UnsafeMutablePointer<AudioObjectID>)
+            -> OSStatus = AudioHardwareCreateProcessTap
+    ) throws -> AudioObjectID {
+        var tap = unknownObject
+        try check(create(description, &tap), "create process tap")
+        return tap
+    }
+
     private static func currentProcessObject() throws -> AudioObjectID {
         var pid = getpid()
         var object = unknownObject
@@ -265,11 +270,16 @@ final class SystemAudioTapBackend: AudioCaptureBackend {
             "read default output device"
         )
 
-        var uid: CFString = "" as CFString
+        var uid: Unmanaged<CFString>?
         address.mSelector = kAudioDevicePropertyDeviceUID
-        size = UInt32(MemoryLayout<CFString>.size)
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         try check(AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &uid), "read output device UID")
-        return uid as String
+        guard let uid else {
+            throw CaptureServiceError.streamFailure(
+                "System audio capture could not read output device UID (no value returned)."
+            )
+        }
+        return uid.takeUnretainedValue() as String
     }
 
     private static func check(_ status: OSStatus, _ operation: String) throws {

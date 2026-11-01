@@ -75,5 +75,5 @@ setup-signing:
         security find-certificate -c "$identity" -p "$keychain" > "$tmp/trusted.pem"
         security add-trusted-cert -p codeSign -k "$keychain" "$tmp/trusted.pem"
     fi
-    printf 'CODE_SIGN_STYLE = Manual\nCODE_SIGN_IDENTITY = "%s"\n' "$identity" > Config/Signing.local.xcconfig
+    printf 'CODE_SIGN_STYLE = Manual\nCODE_SIGN_IDENTITY = %s\n' "$identity" > Config/Signing.local.xcconfig
     echo "Signing identity ready: $identity (Config/Signing.local.xcconfig written)"

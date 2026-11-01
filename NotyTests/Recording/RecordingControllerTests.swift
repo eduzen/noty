@@ -72,6 +72,21 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(snapshot.startCount, 0)
     }
 
+    func testCaptureStartupFailureDisplaysOriginalDiagnostic() async {
+        let message = "System audio capture could not create process tap (OSStatus 1852797029)."
+        let backend = StartupFailingAudioBackend(error: CaptureServiceError.streamFailure(message))
+        let writer = FakeRecordingWriter()
+        let controller = makeController(capture: AudioCaptureService(backends: [backend]), writer: writer)
+
+        await controller.start()
+
+        XCTAssertEqual(controller.state, .interrupted)
+        XCTAssertEqual(controller.latestIssue?.code, "capture.stream-failed")
+        XCTAssertEqual(controller.latestIssue?.message, message)
+        XCTAssertNil(controller.latestIssue?.recoveryURL)
+        XCTAssertEqual(backend.stopCount, 1)
+    }
+
     func testDuplicateStartAndStopAreIdempotent() async {
         let capture = FakeCaptureService()
         let writer = FakeRecordingWriter()
@@ -257,6 +272,26 @@ final class RecordingControllerTests: XCTestCase {
             frameCount: frames,
             samples: Array(repeating: [left, right], count: frames).flatMap { $0 }
         )
+    }
+}
+
+private final class StartupFailingAudioBackend: AudioCaptureBackend {
+    private let error: Error
+    private(set) var stopCount = 0
+
+    init(error: Error) {
+        self.error = error
+    }
+
+    func start(
+        onPacket _: @escaping (CapturedAudioPacket) -> Void,
+        onTermination _: @escaping (CaptureTermination) -> Void
+    ) async throws {
+        throw error
+    }
+
+    func stop() async {
+        stopCount += 1
     }
 }
 

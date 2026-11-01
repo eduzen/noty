@@ -157,6 +157,40 @@ final class AudioCaptureServiceTests: XCTestCase {
         XCTAssertEqual(system.stopCount, 1)
     }
 
+    func testStartupFailurePreservesDiagnosticInBothStreams() async {
+        let message = "System audio capture could not create process tap (OSStatus 1852797029)."
+        let failure = CaptureServiceError.streamFailure(message)
+        let backend = FakeAudioBackend(startError: failure)
+        let service = AudioCaptureService(backends: [backend])
+
+        do {
+            try await service.start()
+            XCTFail("Expected tap creation failure")
+        } catch {
+            XCTAssertEqual(error as? CaptureServiceError, failure)
+        }
+
+        do {
+            for try await _ in service.packets {
+                XCTFail("A failed startup must not produce audio")
+            }
+            XCTFail("Expected packet stream failure")
+        } catch {
+            XCTAssertEqual(error as? CaptureServiceError, failure)
+        }
+
+        var events: [CaptureTermination] = []
+        for await event in service.terminations {
+            events.append(event)
+        }
+        XCTAssertEqual(events, [.unexpected(RecordingIssue(
+            code: "capture.stream-failed",
+            message: message,
+            isRetryAllowed: true
+        ))])
+        XCTAssertEqual(backend.stopCount, 1)
+    }
+
     func testDeniedSystemAudioProducesActionableTermination() async {
         let backend = FakeAudioBackend(startError: CaptureServiceError.systemAudioDenied)
         let service = AudioCaptureService(backends: [backend])

@@ -29,12 +29,13 @@ Automated checks cannot exercise TCC prompts, the system audio tap against live 
 
 | Status | Scenario | Procedure | Expected result |
 |---|---|---|---|
-| Not run | Signed entitlements | Build the app and inspect its signature with `codesign -d --entitlements :- build/DerivedData/Build/Products/Debug/Noty.app`. | The embedded plist contains App Sandbox, `com.apple.security.device.microphone`, Music Folder read/write, and user-selected files read/write, all enabled. No Screen Recording entitlement is needed. |
-| Not run | Stable signature | Run `codesign -dv build/DerivedData/Build/Products/Debug/Noty.app 2>&1 \| grep Authority` after a build. | The authority is `Noty Local` (or your Apple Development certificate), not ad-hoc (`Signature=adhoc`). |
+| Passed 2026-11-01 | Signed entitlements | Build the app and inspect its signature with `codesign -d --entitlements - build/DerivedData/Build/Products/Debug/Noty.app`. | The embedded plist contains App Sandbox, `com.apple.security.device.microphone`, Music Folder read/write, and user-selected files read/write, all enabled. No Screen Recording entitlement is needed. |
+| Passed 2026-11-01 | Stable signature | Run `codesign -dv build/DerivedData/Build/Products/Debug/Noty.app 2>&1 \| grep Authority` after a build. | The authority is `Noty Local` (or your Apple Development certificate), not ad-hoc (`Signature=adhoc`). |
 | Not run | Fresh permissions | Run `just reset-permissions`. Launch Noty without starting a recording, then start one. | No permission prompt at launch. Starting a recording prompts only for Microphone and System Audio Recording Only, and reports recording only after capture starts. |
 | Not run | Permission denied, then granted | Deny microphone access and confirm the actionable issue. Grant it in Settings and retry. Then deny System Audio Recording Only, start a recording, and confirm the issue links to Privacy & Security → System Audio Recording Only. | Microphone denial blocks the start with an actionable issue. System audio denial shows a warning within about 5 seconds and links to the setting; the recording keeps running and is not reported as complete system audio. Granting access and retrying succeeds. |
 | Not run | Rebuild keeps permissions | Grant both permissions, rebuild Noty with the same signing identity, and start a recording. | No new permission prompt; the recording starts with system audio and microphone. |
 | Not run | Output device change | Start recording, then switch the default output device (for example, to headphones). | Recording finalizes once, reports that the output device changed, and reveals any validated partial artifact. |
+| Passed native pipeline 2026-11-01 | Duplex USB output device | Use an output device that also exposes inputs, such as a Scarlett 2i2. Keep a different microphone selected, play a system test sound, and record both sources. | The system aggregate exposes only the tap's stereo input buffer. Hardware inputs are not added to that aggregate; both sources reach the mixer and AAC writer without `capture.invalid-audio`. |
 | Not run | Audio-only capture | Record a short system test sound and microphone audio, stop, and repeat. Inspect the output tracks and the Console app. | Both sources are audible, the `.m4a` has no video track, and no capture errors appear during capture or shutdown. |
 | Not run | Native microphone PCM | Record with a microphone that supplies signed 16-bit PCM, then play the saved file. | Native microphone samples are converted to Float32 without a capture interruption; microphone audio is audible and not distorted. |
 | Not run | Protected or unavailable audio | Play a protected or otherwise unavailable source while recording. | Noty records only audio the system tap supplies; protected audio may arrive silent, and Noty does not claim it was captured. |
@@ -55,3 +56,17 @@ Automated checks cannot exercise TCC prompts, the system audio tap against live 
 - Keep test recordings short except for the explicit one-hour scenario.
 - Validate files in Finder or a media player and inspect the audio format and duration with a media tool.
 - Record failures and recovery URLs; do not delete recovery files until their contents have been validated.
+
+## Permission repair verification — 2026-11-01
+
+- macOS 26.7.1 on Apple Silicon; Xcode 27.2.
+- `just setup-signing` installed the local identity. The generated xcconfig uses `CODE_SIGN_IDENTITY = Noty Local`; quotes in this setting made Xcode search for a certificate whose name included literal quotes.
+- `just check` passed all 77 tests, the Debug build, and the whitespace check. `just format` passed.
+- The tap-creation regression failed against the old permission-denied mapping, then passed after routing the result through the Core Audio status checker. Service and controller tests confirm that the original diagnostic survives startup failure.
+- The justfile and Xcode GUI builds both passed signature verification and have identical certificate-based designated requirements. Signed sandbox, microphone, Music folder, and user-selected-file entitlements remain enabled.
+- Microphone, AudioCapture, and legacy ScreenCapture grants were reset successfully once after switching identities.
+- A separate build made with the command-line override `CURRENT_PROJECT_VERSION=2` has a different signature hash and the same designated requirement. The override is confined to the verification build; project settings were not changed.
+- The first live recording produced a decodable 2.56-second AAC `.m4a` at 48 kHz stereo with no video track, but it was nearly silent. The user confirmed that the changed build did not ask for permissions again; audio capture still failed.
+- A signed native probe using the actual capture sources reproduced `capture.invalid-audio` with Scarlett 2i2 USB output and Logitech StreamCam input. The aggregate returned two interleaved stereo buffers, while the tap format described one. The physical output subdevice contributed the extra hardware input.
+- Removing the physical output subdevice left one stereo tap buffer and captured both sources without errors. The probe then exercised the actual normalizer, mixer, recovery writer, AAC writer, and validator for 20.53 seconds. Measured raw peaks were 0.1983 for system audio and 0.3112 for microphone audio; the decoded AAC peak was -16.2 dBFS. The file decoded successfully as 48 kHz stereo AAC with no video track.
+- `just check` passed all 77 tests again after the topology fix, and `just format` passed. The App Sandbox and existing audio entitlements were retained; no audio analytics exception was added.
