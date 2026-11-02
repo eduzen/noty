@@ -57,6 +57,7 @@ final class RecordingController: ObservableObject {
     private var recordingStartUptime: TimeInterval?
     private var stopRequested = false
     private var didBootstrap = false
+    private var lifecycleRevision: UInt64 = 0
 
     init(
         permissions: any RecordingPermissionPreparing = PermissionCoordinator(),
@@ -101,11 +102,16 @@ final class RecordingController: ObservableObject {
     func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
+        let revision = lifecycleRevision
+        let isInitialIdle = state == .idle && revision == 0
         do {
             let lease = try destinations.resolveCurrentDestination()
-            currentDestinationURL = lease.url
+            defer { lease.close() }
+            if isInitialIdle {
+                currentDestinationURL = lease.url
+            }
             let recoveries = await recoveryDiscovery(lease.url)
-            lease.close()
+            guard isInitialIdle, lifecycleRevision == revision else { return }
             if let artifact = recoveries.max(by: { $0.duration < $1.duration }) {
                 lastArtifact = artifact
                 latestIssue = RecordingIssue(
@@ -117,12 +123,14 @@ final class RecordingController: ObservableObject {
                 state = .interrupted
             }
         } catch {
+            guard isInitialIdle, lifecycleRevision == revision else { return }
             latestIssue = issue(from: error)
         }
     }
 
     func start() async {
         guard canStart else { return }
+        lifecycleRevision += 1
         stopRequested = false
         pendingFailure = nil
         finalizationTask = nil
@@ -169,6 +177,7 @@ final class RecordingController: ObservableObject {
         guard canChooseDestination else { return }
         do {
             let lease = try destinations.chooseFolder()
+            lifecycleRevision += 1
             currentDestinationURL = lease.url
             lease.close()
             latestIssue = nil
@@ -294,22 +303,42 @@ extension RecordingController {
         writer: any RecordingWriting
     ) async -> AudioMixer {
         var mixer = AudioMixer()
+        let normalizer = AudioNormalizer()
         var silenceMonitor = SystemAudioSilenceMonitor()
+        var failure: Error?
         do {
             for try await packet in packets {
                 if silenceMonitor.observe(packet) {
                     await reportSilentSystemAudio()
                 }
-                let normalized = try AudioNormalizer().normalize(packet)
-                for chunk in try mixer.append(normalized) {
-                    try await writer.append(chunk)
-                }
+                try await appendNormalizedPackets(normalizer.normalize(packet), to: &mixer, writer: writer)
             }
-            await captureEnded()
         } catch {
-            await captureEnded(error: error)
+            failure = error
         }
+        // Drain converter look-ahead on Stop or capture interruption, never after a writer/audio failure.
+        let canDrain = failure.map { RecordingIssueMapper.issue(from: $0).code.hasPrefix("capture.") } ?? true
+        if !Task.isCancelled, canDrain {
+            do {
+                try await appendNormalizedPackets(normalizer.finish(), to: &mixer, writer: writer)
+            } catch {
+                failure = error
+            }
+        }
+        await captureEnded(error: failure)
         return mixer
+    }
+
+    private nonisolated func appendNormalizedPackets(
+        _ packets: [NormalizedAudioPacket],
+        to mixer: inout AudioMixer,
+        writer: any RecordingWriting
+    ) async throws {
+        for packet in packets {
+            for chunk in try mixer.append(packet) {
+                try await writer.append(chunk)
+            }
+        }
     }
 
     /// Warns, but keeps recording: silence may also mean nothing is playing.

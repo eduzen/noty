@@ -8,11 +8,7 @@ struct NotyApp: App {
         MenuBarExtra {
             MenuBarView(controller: appDelegate.controller)
         } label: {
-            RecordingStatusView(
-                state: appDelegate.controller.state,
-                elapsedDuration: appDelegate.controller.elapsedDuration,
-                compact: true
-            )
+            RecordingStatusLabel(controller: appDelegate.controller)
         }
         .menuBarExtraStyle(.menu)
     }

@@ -3,17 +3,19 @@ import XCTest
 
 final class AudioMixerTests: XCTestCase {
     func testNormalizesAndMixesMonoMicrophoneWithStereoSystemAudio() throws {
-        let microphone = try AudioNormalizer().normalize(CapturedAudioPacket(
+        let normalizer = AudioNormalizer()
+        let microphone = try normalizer.normalize(CapturedAudioPacket(
             source: .microphone, presentationTime: 0, sampleRate: 44100, channelCount: 1,
             frameCount: 441, samples: Array(repeating: 0.4, count: 441)
         ))
-        let system = try AudioNormalizer().normalize(CapturedAudioPacket(
+        let system = try normalizer.normalize(CapturedAudioPacket(
             source: .system, presentationTime: 0, sampleRate: 48000, channelCount: 2,
             frameCount: 480, samples: Array(repeating: [0.5, -0.5], count: 480).flatMap { $0 }
         ))
         var mixer = AudioMixer(origin: 0, reorderWindow: 1)
-        _ = try mixer.append(microphone)
-        _ = try mixer.append(system)
+        for packet in try microphone + system + normalizer.finish() {
+            _ = try mixer.append(packet)
+        }
         let chunks = try mixer.finish()
         let sample = try XCTUnwrap(chunks.first?.samples)
         XCTAssertLessThanOrEqual(abs(chunks.reduce(0) { $0 + $1.frameCount } - 480), 1)

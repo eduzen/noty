@@ -38,9 +38,10 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
             capture.emit(packet(
                 source: .microphone,
                 time: presentationTime,
-                frames: packetFrames,
+                frames: 4410,
                 frequency: index < 3 ? 880 : (overloadedMix ? 440 : 880),
-                amplitude: overloadedMix ? 1 : 0.5
+                amplitude: overloadedMix ? 1 : 0.5,
+                sampleRate: 44100
             ))
             try await Task.sleep(nanoseconds: 5_000_000)
         }
@@ -73,11 +74,11 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
     }
 
     private func packet(source: AudioSource, time: Double, frames: Int, frequency: Double,
-                        amplitude: Double) -> CapturedAudioPacket {
+                        amplitude: Double, sampleRate: Double = AudioFormat.sampleRate) -> CapturedAudioPacket {
         var samples: [Float] = []
         samples.reserveCapacity(frames * 2)
         for frame in 0 ..< frames {
-            let instant = time + Double(frame) / AudioFormat.sampleRate
+            let instant = time + Double(frame) / sampleRate
             let sample = Float(amplitude * sin(2 * Double.pi * frequency * instant))
             samples.append(sample)
             samples.append(sample)
@@ -85,7 +86,7 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
         return CapturedAudioPacket(
             source: source,
             presentationTime: time,
-            sampleRate: AudioFormat.sampleRate,
+            sampleRate: sampleRate,
             channelCount: AudioFormat.channelCount,
             frameCount: frames,
             samples: samples

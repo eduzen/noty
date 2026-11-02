@@ -26,6 +26,49 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertLessThan(samples[1], -0.15)
     }
 
+    func testStopDrainsResampledMicrophoneTail() async {
+        let capture = FakeCaptureService()
+        let writer = FakeRecordingWriter()
+        let controller = makeController(capture: capture, writer: writer)
+        await controller.start()
+        capture.emit(CapturedAudioPacket(
+            source: .microphone, presentationTime: 0, sampleRate: 44100,
+            channelCount: 1, frameCount: 441, samples: Array(repeating: 0.4, count: 441)
+        ))
+
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(snapshot.chunks.reduce(0) { $0 + $1.frameCount }, 480)
+        XCTAssertEqual(controller.lastArtifact?.duration ?? 0, 0.01, accuracy: 1.0 / 48000)
+        XCTAssertEqual(snapshot.finishCount, 1)
+    }
+
+    func testCaptureInterruptionDrainsResampledMicrophoneTail() async {
+        let capture = FakeCaptureService()
+        let issue = RecordingIssue(code: "capture.microphone-disconnected", message: "Microphone disconnected.")
+        let artifact = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/recovery.m4a"), kind: .recovery, duration: 0.01
+        )
+        let writer = FakeRecordingWriter(failureOutcome: .partial(artifact, issue))
+        let controller = makeController(capture: capture, writer: writer)
+        await controller.start()
+        capture.emit(CapturedAudioPacket(
+            source: .microphone, presentationTime: 0, sampleRate: 44100,
+            channelCount: 1, frameCount: 441, samples: Array(repeating: 0.4, count: 441)
+        ))
+        capture.fail(issue)
+        await writer.waitUntilFailure()
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        XCTAssertEqual(controller.state, .interrupted)
+        XCTAssertEqual(controller.latestIssue, issue)
+        XCTAssertEqual(snapshot.chunks.reduce(0) { $0 + $1.frameCount }, 480)
+        XCTAssertEqual(snapshot.failCount, 1)
+    }
+
     func testConsumesStartupAudioWhileMainActorIsBusy() async throws {
         let source = FakeCaptureService()
         let gate = AsyncControllerGate()
@@ -232,6 +275,301 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertNil(controller.latestIssue)
     }
 
+    func testBootstrapRecoveryDuringRecordingKeepsStopAndFinalizationAvailable() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let capture = FakeCaptureService()
+        let writer = FakeRecordingWriter()
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            destinations: destinations,
+            capture: capture,
+            writer: writer,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        XCTAssertTrue(controller.canStart)
+        await controller.start()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertTrue(controller.canStop)
+        XCTAssertNil(controller.latestIssue)
+        XCTAssertNil(controller.lastArtifact)
+        XCTAssertEqual(destinations.closedLeaseCount, 1)
+        await controller.stop()
+        let canQuit = await controller.finishForTermination()
+        let snapshot = await writer.snapshot()
+        XCTAssertTrue(canQuit)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(controller.lastArtifact?.kind, .recording)
+        XCTAssertEqual(snapshot.finishCount, 1)
+        XCTAssertEqual(snapshot.failCount, 0)
+        XCTAssertEqual(capture.stopCount, 1)
+        XCTAssertEqual(destinations.closedLeaseCount, 2)
+    }
+
+    func testBootstrapRecoveryDuringStartupPreservesTerminationCleanup() async {
+        let discoveryGate = AsyncControllerGate()
+        let startupGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let source = FakeCaptureService()
+        let capture = GatedStartupCaptureService(source: source, gate: startupGate)
+        let writer = FakeRecordingWriter()
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            destinations: destinations,
+            capture: capture,
+            writer: writer,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        let starting = Task { await controller.start() }
+        await startupGate.waitForEntry()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .starting)
+        XCTAssertTrue(controller.hasActiveRecording)
+        XCTAssertNil(controller.latestIssue)
+        XCTAssertNil(controller.lastArtifact)
+        XCTAssertEqual(destinations.closedLeaseCount, 1)
+        // This actor cannot open the gate until termination has suspended on startup cancellation.
+        let releasingStartup = Task { @MainActor in await startupGate.open() }
+        let canQuit = await controller.finishForTermination()
+        await releasingStartup.value
+        await starting.value
+
+        let snapshot = await writer.snapshot()
+        XCTAssertTrue(canQuit)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(source.stopCount, 1)
+        XCTAssertEqual(snapshot.failCount, 1)
+        XCTAssertEqual(snapshot.finishCount, 0)
+        XCTAssertEqual(destinations.closedLeaseCount, 2)
+    }
+
+    func testBootstrapRecoveryAfterCompletedRecordingPreservesSavedArtifact() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let writer = FakeRecordingWriter()
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            destinations: destinations,
+            writer: writer,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        await controller.start()
+        await controller.stop()
+        let savedArtifact = controller.lastArtifact
+        XCTAssertEqual(savedArtifact?.kind, .recording)
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(controller.lastArtifact, savedArtifact)
+        XCTAssertNil(controller.latestIssue)
+        let canQuit = await controller.finishForTermination()
+        let snapshot = await writer.snapshot()
+        XCTAssertTrue(canQuit)
+        XCTAssertEqual(snapshot.finishCount, 1)
+        XCTAssertEqual(destinations.closedLeaseCount, 2)
+    }
+
+    func testBootstrapRecoveryAfterFailedStartPreservesActionableFailure() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let issue = RecordingIssue(code: "permission.microphone-denied", message: "Allow microphone access.")
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            permissions: FakePermissions(issue: issue),
+            destinations: destinations,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        await controller.start()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .failed)
+        XCTAssertEqual(controller.latestIssue, issue)
+        XCTAssertNil(controller.lastArtifact)
+        XCTAssertTrue(controller.canStart)
+        XCTAssertEqual(destinations.closedLeaseCount, 1)
+    }
+
+    func testBootstrapRecoveryAfterFailedRecordingPreservesFailureAndQuitDecision() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let capture = FakeCaptureService()
+        let issue = RecordingIssue(code: "capture.failure", message: "Reconnect the microphone.")
+        let writer = FakeRecordingWriter(failureOutcome: .failed(issue))
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            destinations: destinations,
+            capture: capture,
+            writer: writer,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        await controller.start()
+        capture.fail(issue)
+        await writer.waitUntilFailure()
+        await controller.stop()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .interrupted)
+        XCTAssertEqual(controller.latestIssue, issue)
+        XCTAssertNil(controller.lastArtifact)
+        let canQuit = await controller.finishForTermination()
+        let snapshot = await writer.snapshot()
+        XCTAssertFalse(canQuit)
+        XCTAssertEqual(snapshot.failCount, 1)
+        XCTAssertEqual(snapshot.finishCount, 0)
+        XCTAssertEqual(destinations.closedLeaseCount, 2)
+    }
+
+    func testFolderSelectionMakesPendingBootstrapRecoveryStale() async {
+        let discoveryGate = AsyncControllerGate()
+        let selectedFolder = URL(fileURLWithPath: "/new-recordings", isDirectory: true)
+        let destinations = FakeDestinations(chosenFolder: selectedFolder)
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            destinations: destinations,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        controller.chooseDestination()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(controller.currentDestinationURL, selectedFolder)
+        XCTAssertNil(controller.latestIssue)
+        XCTAssertNil(controller.lastArtifact)
+        XCTAssertTrue(controller.canStart)
+        XCTAssertEqual(destinations.closedLeaseCount, 2)
+    }
+
+    func testInitialBootstrapSurfacesLongestOrphanAndClosesLease() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let orphan = recoveryArtifact()
+        let shorter = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/shorter-recovery.m4a"),
+            kind: .recovery,
+            duration: 0.5
+        )
+        let controller = makeController(
+            destinations: destinations,
+            recoveryDiscovery: { folder in
+                XCTAssertEqual(folder, URL(fileURLWithPath: "/recordings", isDirectory: true))
+                await discoveryGate.wait()
+                return [orphan, shorter]
+            }
+        )
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        XCTAssertTrue(controller.canStart)
+        XCTAssertEqual(destinations.closedLeaseCount, 0)
+        await discoveryGate.open()
+        await bootstrapping.value
+        await controller.bootstrap()
+
+        XCTAssertEqual(controller.state, .interrupted)
+        XCTAssertEqual(controller.lastArtifact, orphan)
+        XCTAssertEqual(controller.latestIssue?.code, "recording.recovery-found")
+        XCTAssertEqual(controller.latestIssue?.recoveryURL, orphan.url)
+        XCTAssertEqual(destinations.resolveCount, 1)
+        XCTAssertEqual(destinations.closedLeaseCount, 1)
+    }
+
+    func testBootstrapBegunAfterCompletedRecordingCannotReplaceItsArtifact() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            destinations: destinations,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        await controller.start()
+        await controller.stop()
+        let savedArtifact = controller.lastArtifact
+        XCTAssertEqual(savedArtifact?.kind, .recording)
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(controller.lastArtifact, savedArtifact)
+        XCTAssertNil(controller.latestIssue)
+        XCTAssertEqual(destinations.closedLeaseCount, 2)
+    }
+
+    func testBootstrapBegunAfterFailedStartCannotReplaceItsFailure() async {
+        let discoveryGate = AsyncControllerGate()
+        let destinations = FakeDestinations()
+        let issue = RecordingIssue(code: "permission.microphone-denied", message: "Allow microphone access.")
+        let orphan = recoveryArtifact()
+        let controller = makeController(
+            permissions: FakePermissions(issue: issue),
+            destinations: destinations,
+            recoveryDiscovery: { _ in
+                await discoveryGate.wait()
+                return [orphan]
+            }
+        )
+        await controller.start()
+        let bootstrapping = Task { await controller.bootstrap() }
+        await discoveryGate.waitForEntry()
+        await discoveryGate.open()
+        await bootstrapping.value
+
+        XCTAssertEqual(controller.state, .failed)
+        XCTAssertEqual(controller.latestIssue, issue)
+        XCTAssertNil(controller.lastArtifact)
+        XCTAssertEqual(destinations.closedLeaseCount, 1)
+    }
+
+    private func recoveryArtifact() -> RecordingArtifact {
+        RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/orphan-recovery.m4a"),
+            kind: .recovery,
+            duration: 2
+        )
+    }
+
     private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -247,7 +585,8 @@ final class RecordingControllerTests: XCTestCase {
         permissions: FakePermissions? = nil,
         destinations: FakeDestinations? = nil,
         capture: (any CaptureService)? = nil,
-        writer: FakeRecordingWriter? = nil
+        writer: FakeRecordingWriter? = nil,
+        recoveryDiscovery: @escaping RecordingController.RecoveryDiscovery = { _ in [] }
     ) -> RecordingController {
         let resolvedPermissions = permissions ?? FakePermissions()
         let resolvedDestinations = destinations ?? FakeDestinations()
@@ -258,7 +597,7 @@ final class RecordingControllerTests: XCTestCase {
             destinations: resolvedDestinations,
             captureFactory: { resolvedCapture },
             writerFactory: { resolvedWriter },
-            recoveryDiscovery: { _ in [] }
+            recoveryDiscovery: recoveryDiscovery
         )
     }
 
@@ -334,13 +673,27 @@ private final class FakePermissions: RecordingPermissionPreparing {
 
 @MainActor
 private final class FakeDestinations: RecordingDestinationManaging {
-    private let folder = URL(fileURLWithPath: "/recordings", isDirectory: true)
+    private var folder = URL(fileURLWithPath: "/recordings", isDirectory: true)
+    private let chosenFolder: URL?
+    private(set) var resolveCount = 0
+    private(set) var closedLeaseCount = 0
+
+    init(chosenFolder: URL? = nil) {
+        self.chosenFolder = chosenFolder
+    }
+
     func resolveCurrentDestination() throws -> DestinationLease {
-        DestinationLease(url: folder, releaseAccess: nil)
+        resolveCount += 1
+        return lease(for: folder)
     }
 
     func chooseFolder() throws -> DestinationLease {
-        DestinationLease(url: folder, releaseAccess: nil)
+        folder = chosenFolder ?? folder
+        return lease(for: folder)
+    }
+
+    private func lease(for folder: URL) -> DestinationLease {
+        DestinationLease(url: folder, releaseAccess: { self.closedLeaseCount += 1 })
     }
 }
 

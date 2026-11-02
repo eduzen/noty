@@ -1,5 +1,17 @@
 import SwiftUI
 
+struct RecordingStatusLabel: View {
+    @ObservedObject var controller: RecordingController
+
+    var body: some View {
+        RecordingStatusView(
+            state: controller.state,
+            elapsedDuration: controller.elapsedDuration,
+            compact: true
+        )
+    }
+}
+
 struct RecordingStatusView: View {
     let state: RecordingState
     let elapsedDuration: TimeInterval

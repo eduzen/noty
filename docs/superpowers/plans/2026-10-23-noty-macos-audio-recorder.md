@@ -158,7 +158,7 @@ Each subagent should modify only the files listed for its task. In particular, T
 **Interfaces:**
 
 - `CapturedAudioPacket` contains source (`system` or `microphone`), a presentation timestamp, sample rate, channel count, frame count, and copied interleaved Float32 samples.
-- `AudioNormalizer.normalize(_:) -> NormalizedAudioPacket` produces 48 kHz stereo samples using `AVAudioConverter` and explicit channel mapping.
+- A session-owned `AudioNormalizer.normalize(_:) -> [NormalizedAudioPacket]` produces zero or more 48 kHz stereo packets using independent per-source `AVAudioConverter` history and explicit channel mapping. `finish() -> [NormalizedAudioPacket]` drains remaining output once, in capture-time order.
 - `AudioTimeline.append(_:) -> [MixedAudioChunk]` orders packets by presentation timestamp, inserts silence for gaps, and applies the defined overlap/discontinuity policy.
 - `AudioMixer.append(_:) -> [MixedAudioChunk]` mixes both sources with fixed headroom and a limiter; `finish() -> [MixedAudioChunk]` flushes the remaining timeline.
 - `BoundedAudioQueue` has a fixed duration/capacity and a `.failOnOverflow` policy for recording. It never grows past its configured bound.
@@ -173,7 +173,7 @@ Each subagent should modify only the files listed for its task. In particular, T
 
 - [ ] **Step 3: Implement normalization**
 
-  Convert each packet to 48 kHz stereo Float32, preserve the packet’s presentation timestamp, and reject malformed or unsupported audio formats with a typed issue.
+  Stream input into persistent per-source conversion state, timestamp contiguous output from its capture-time anchor plus cumulative output frames, preserve real gaps and discontinuities, and reject malformed or unsupported formats with a typed issue. Treat callback exhaustion as temporary input unavailability; drain the normalizer before finalizing the mixer at stream end.
 
 - [ ] **Step 4: Implement the timeline**
 
