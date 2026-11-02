@@ -35,13 +35,18 @@ final class MicrophoneEngineBackend: AudioCaptureBackend {
             terminationHandler = onTermination
             stopped = false
         }
-        input.installTap(onBus: 0, bufferSize: Self.bufferFrames, format: format) { [weak self] buffer, time in
+        // Let the input node use its native format. Passing a stale hardware format can make
+        // AVAudioEngine fail with kAudioUnitErr_InvalidElement (-10877) during startup.
+        input.installTap(onBus: 0, bufferSize: Self.bufferFrames, format: nil) { [weak self] buffer, time in
             self?.handle(buffer, time: time)
         }
         do {
             engine.prepare()
             try engine.start()
         } catch {
+            if engine.isRunning {
+                engine.stop()
+            }
             input.removeTap(onBus: 0)
             withLock {
                 self.engine = nil
@@ -65,8 +70,10 @@ final class MicrophoneEngineBackend: AudioCaptureBackend {
         }
         removeObservers()
         guard let engine else { return }
+        if engine.isRunning {
+            engine.stop()
+        }
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
     }
 
     private func handle(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {

@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 
 actor RecordingWriter {
@@ -235,45 +236,153 @@ struct AVRecordingMediaWriterFactory: RecordingMediaWriterFactory {
 }
 
 private final class AVRecordingMediaWriter: RecordingMediaWriter {
-    private var file: AVAudioFile?
-    private let format: AVAudioFormat
+    private let writer: AVAssetWriter
+    private let input: AVAssetWriterInput
+    private let formatDescription: CMAudioFormatDescription
+    private var sessionStarted = false
     private var finished = false
 
     init(url: URL) throws {
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioFormat.sampleRate,
-                                         channels: AVAudioChannelCount(AudioFormat.channelCount), interleaved: false)
-        else {
-            throw RecordingIssue(code: "writer.format", message: "The recording audio format is unavailable.")
+        do {
+            writer = try AVAssetWriter(outputURL: url, fileType: .m4a)
+        } catch {
+            throw RecordingIssue(code: "writer.create", message: "The recording file could not be created.")
         }
-        self.format = format
         let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC,
                                        AVSampleRateKey: AudioFormat.sampleRate,
                                        AVNumberOfChannelsKey: AudioFormat.channelCount,
                                        AVEncoderBitRateKey: 192_000]
-        file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+        input.expectsMediaDataInRealTime = false
+        guard writer.canAdd(input) else {
+            throw RecordingIssue(code: "writer.input", message: "The recording audio input is unavailable.")
+        }
+        writer.add(input)
+        formatDescription = try Self.makeFormatDescription()
+        guard writer.startWriting() else {
+            throw Self.writerIssue(writer, code: "writer.start", message: "The recording file could not be started.")
+        }
     }
 
     func append(_ chunk: MixedAudioChunk) throws {
-        guard !finished, let file,
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(chunk.frameCount)),
-              let channels = buffer.floatChannelData
-        else {
+        guard !finished else {
             throw RecordingIssue(code: "writer.buffer", message: "The recording audio buffer could not be allocated.")
         }
-        buffer.frameLength = AVAudioFrameCount(chunk.frameCount)
-        for frame in 0 ..< chunk.frameCount {
-            channels[0][frame] = chunk.samples[frame * 2]
-            channels[1][frame] = chunk.samples[frame * 2 + 1]
+        if !sessionStarted {
+            let startTime = CMTime(seconds: chunk.presentationTime, preferredTimescale: 1_000_000)
+            writer.startSession(atSourceTime: startTime)
+            sessionStarted = true
         }
-        try file.write(from: buffer)
+        guard input.isReadyForMoreMediaData else {
+            throw Self.writerIssue(
+                writer,
+                code: "writer.backpressure",
+                message: "The recording writer could not keep up with incoming audio."
+            )
+        }
+        let sampleBuffer = try makeSampleBuffer(for: chunk)
+        guard input.append(sampleBuffer) else {
+            throw Self.writerIssue(writer, code: "writer.write-failed", message: "Noty could not write the recording.")
+        }
     }
 
     func finish() async throws {
-        finished = true; file = nil
+        guard !finished else { return }
+        finished = true
+        input.markAsFinished()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writer.finishWriting {
+                continuation.resume()
+            }
+        }
+        guard writer.status == .completed else {
+            throw Self.writerIssue(
+                writer,
+                code: "writer.finish-failed",
+                message: "The recording file could not be finalized."
+            )
+        }
     }
 
     func cancel() {
-        finished = true; file = nil
+        guard !finished else { return }
+        finished = true
+        writer.cancelWriting()
+    }
+
+    private func makeSampleBuffer(for chunk: MixedAudioChunk) throws -> CMSampleBuffer {
+        let byteCount = chunk.samples.count * MemoryLayout<Float>.size
+        var blockBuffer: CMBlockBuffer?
+        var status = CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: byteCount,
+            blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: byteCount,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr, let blockBuffer else {
+            throw RecordingIssue(code: "writer.buffer", message: "The recording audio buffer could not be allocated.")
+        }
+        status = chunk.samples.withUnsafeBytes { bytes in
+            CMBlockBufferReplaceDataBytes(
+                with: bytes.baseAddress!,
+                blockBuffer: blockBuffer,
+                offsetIntoDestination: 0,
+                dataLength: byteCount
+            )
+        }
+        guard status == noErr else {
+            throw RecordingIssue(code: "writer.buffer", message: "The recording audio buffer could not be copied.")
+        }
+
+        var sampleBuffer: CMSampleBuffer?
+        status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: blockBuffer,
+            formatDescription: formatDescription,
+            sampleCount: chunk.frameCount,
+            presentationTimeStamp: CMTime(seconds: chunk.presentationTime, preferredTimescale: 1_000_000),
+            packetDescriptions: nil,
+            sampleBufferOut: &sampleBuffer
+        )
+        guard status == noErr, let sampleBuffer else {
+            throw RecordingIssue(code: "writer.buffer", message: "The recording sample buffer could not be created.")
+        }
+        return sampleBuffer
+    }
+
+    private static func makeFormatDescription() throws -> CMAudioFormatDescription {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioFormat.sampleRate,
+                                         channels: AVAudioChannelCount(AudioFormat.channelCount), interleaved: true)
+        else {
+            throw RecordingIssue(code: "writer.format", message: "The recording audio format is unavailable.")
+        }
+        let streamDescription = format.streamDescription
+        var description: CMAudioFormatDescription?
+        var asbd = streamDescription.pointee
+        let status = CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: &asbd,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &description
+        )
+        guard status == noErr, let description else {
+            throw RecordingIssue(code: "writer.format", message: "The recording audio format is unavailable.")
+        }
+        return description
+    }
+
+    private static func writerIssue(_ writer: AVAssetWriter, code: String, message: String) -> RecordingIssue {
+        let detail = writer.error?.localizedDescription
+        return RecordingIssue(code: code, message: detail.map { "\(message) \($0)" } ?? message)
     }
 }
 

@@ -80,9 +80,28 @@ struct AVRecordingMediaInspector: RecordingMediaInspecting {
             .first else {
             return RecordingMediaInspection(isPlayable: false, sampleRate: nil, channelCount: nil, duration: 0)
         }
+        try readEntireAudioFile(at: url)
         let duration = try CMTimeGetSeconds(await asset.load(.duration))
         return RecordingMediaInspection(isPlayable: playable, sampleRate: asbd.mSampleRate,
                                         channelCount: Int(asbd.mChannelsPerFrame), duration: duration)
+    }
+
+    private func readEntireAudioFile(at url: URL) throws {
+        let file = try AVAudioFile(forReading: url)
+        guard file.length > 0 else { return }
+        let bufferSize: AVAudioFrameCount = 4096
+        var remaining = file.length
+        while remaining > 0 {
+            let frameCount = AVAudioFrameCount(min(Int64(bufferSize), remaining))
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
+                throw RecordingIssue(code: "media.decode-failed", message: "The recording audio could not be decoded.")
+            }
+            try file.read(into: buffer, frameCount: frameCount)
+            guard buffer.frameLength > 0 else {
+                throw RecordingIssue(code: "media.decode-failed", message: "The recording audio could not be decoded.")
+            }
+            remaining -= Int64(buffer.frameLength)
+        }
     }
 }
 
