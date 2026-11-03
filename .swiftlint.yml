@@ -1,0 +1,6 @@
+included:
+  - Noty
+  - NotyTests
+  - NotyTranscriptionWorker
+  - TranscriptionShared
+  - docs/verification

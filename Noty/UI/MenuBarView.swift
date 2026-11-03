@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var controller: RecordingController
+    @ObservedObject var transcriptions: TranscriptionController
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -89,12 +90,45 @@ struct MenuBarView: View {
             }
         }
 
+        if transcriptions.modelState != .notInstalled || !transcriptions.jobs.isEmpty || transcriptions.issue != nil {
+            Divider()
+            Label(transcriptionSummary, systemImage: "text.bubble")
+                .font(.caption)
+            Button("Transcription Details…") {
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+
         Divider()
         Button("Quit Noty") { NSApp.terminate(nil) }
     }
 
     private var showsWarning: Bool {
         controller.state == .interrupted || controller.state == .failed
+    }
+
+    private var transcriptionSummary: String {
+        if transcriptions.modelState == .preparing {
+            return "Preparing transcription models…"
+        }
+        if transcriptions.modelState == .needsRepair {
+            return "Transcription models need repair"
+        }
+        let pending = transcriptions.jobs.filter(\.canCancel)
+        if transcriptions.isRecording, !pending.isEmpty {
+            return "Transcription paused while recording"
+        }
+        if let running = pending.first(where: { $0.status.isRunning }) {
+            return "\(running.status.title)…"
+        }
+        if !pending.isEmpty {
+            return pending.count == 1 ? "1 transcription waiting" : "\(pending.count) transcriptions waiting"
+        }
+        if transcriptions.issue != nil || transcriptions.jobs.contains(where: { $0.status == .needsAttention }) {
+            return "Transcription needs attention"
+        }
+        return "Transcription ready"
     }
 
     private var statusTitle: String {

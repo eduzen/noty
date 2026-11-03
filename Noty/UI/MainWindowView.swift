@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MainWindowView: View {
     @ObservedObject var controller: RecordingController
+    @ObservedObject var transcriptions: TranscriptionController
     @Binding var showMenuBarIcon: Bool
 
     var body: some View {
@@ -16,6 +17,7 @@ struct MainWindowView: View {
                 RecoveredRecordingsView(controller: controller)
                 settings
                 lastRecording
+                TranscriptionView(controller: transcriptions)
             }
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .leading)

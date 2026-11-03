@@ -10,6 +10,10 @@ default:
     @just --list
 
 build:
+    # Xcode test preparation rewrites cached entitlements, including inherited helpers.
+    # Regenerate these signing inputs so a normal build restores production permissions.
+    rm -f "{{derived_data}}/Build/Intermediates.noindex/Noty.build/Debug/Noty.build/Noty.app.xcent" "{{derived_data}}/Build/Intermediates.noindex/Noty.build/Debug/NotyTranscriptionWorker.build/NotyTranscriptionWorker.xcent"
+    rm -f "{{app_path}}/Contents/MacOS/NotyTranscriptionWorker"
     xcodebuild -project "{{project}}" -scheme "{{scheme}}" -destination "{{destination}}" -derivedDataPath "{{derived_data}}" build -quiet
 
 test:

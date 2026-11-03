@@ -52,6 +52,7 @@ final class RecordingController: ObservableObject {
     private let writerFactory: WriterFactory
     private let recoveryDiscovery: RecoveryDiscovery
     private let recoveryNoticeStore: any RecoveryNoticeStoring
+    private let transcriptions: (any RecordingTranscriptionScheduling)?
     private var destinationLease: DestinationLease?
     private var capture: CaptureService?
     private var writer: (any RecordingWriting)?
@@ -82,7 +83,8 @@ final class RecordingController: ObservableObject {
                 fileSystem: LocalRecordingMediaFileSystem()
             )
         },
-        recoveryNoticeStore: any RecoveryNoticeStoring = RecoveryNoticeStore()
+        recoveryNoticeStore: any RecoveryNoticeStoring = RecoveryNoticeStore(),
+        transcriptions: (any RecordingTranscriptionScheduling)? = nil
     ) {
         self.permissions = permissions
         self.destinations = destinations
@@ -90,6 +92,7 @@ final class RecordingController: ObservableObject {
         self.writerFactory = writerFactory
         self.recoveryDiscovery = recoveryDiscovery
         self.recoveryNoticeStore = recoveryNoticeStore
+        self.transcriptions = transcriptions
     }
 
     var canStart: Bool {
@@ -256,6 +259,8 @@ final class RecordingController: ObservableObject {
 extension RecordingController {
     private func startOperation() async {
         do {
+            try await transcriptions?.suspendForRecording()
+            guard !stopRequested else { await cancelStartup(); return }
             _ = try await permissions.prepareForRecording()
             guard !stopRequested else { await cancelStartup(); return }
 
@@ -320,6 +325,7 @@ extension RecordingController {
         lastOutcome = nil
         pendingFailure = nil
         state = .idle
+        transcriptions?.resumeAfterRecording()
     }
 
     private func failStartup(_ issue: RecordingIssue) async {
@@ -344,6 +350,7 @@ extension RecordingController {
         captureTask = nil
         terminationTask?.cancel()
         terminationTask = nil
+        transcriptions?.resumeAfterRecording()
     }
 
     private func startCaptureTasks(_ capture: CaptureService, writer: any RecordingWriting) {
@@ -544,6 +551,9 @@ extension RecordingController {
                 let failure = issue(from: error)
                 let failedOutcome = await writer.fail(failure)
                 pendingFailure = (failure, .failed)
+                if case let .saved(artifact) = failedOutcome {
+                    await transcriptions?.enqueueRecording(artifact)
+                }
                 apply(failedOutcome, terminalState: .failed)
                 releaseRecordingResources()
                 lastOutcome = failedOutcome
@@ -554,6 +564,9 @@ extension RecordingController {
             outcome = .failed(failure)
         }
 
+        if case let .saved(artifact) = outcome {
+            await transcriptions?.enqueueRecording(artifact)
+        }
         apply(outcome, terminalState: finalState)
         releaseRecordingResources()
         lastOutcome = outcome
@@ -588,6 +601,7 @@ extension RecordingController {
         captureTask = nil
         recordingStartUptime = nil
         mixer = AudioMixer()
+        transcriptions?.resumeAfterRecording()
     }
 
     private func startElapsedTimer() {

@@ -625,6 +625,42 @@ final class RecordingControllerTests: XCTestCase {
         )
     }
 
+    func testTranscriptionIsSuspendedBeforeCaptureAndSavedOnceBeforeLeaseCloses() async {
+        let capture = FakeCaptureService()
+        let destinations = FakeDestinations()
+        let scheduling = TestRecordingTranscriptionScheduler()
+        scheduling.onEnqueue = { XCTAssertEqual(destinations.closedLeaseCount, 0) }
+        let controller = makeController(destinations: destinations, capture: capture, transcriptions: scheduling)
+        await controller.start()
+        XCTAssertEqual(scheduling.events, ["suspend"])
+        XCTAssertEqual(controller.state, .recording)
+        await controller.stop()
+        await controller.stop()
+        XCTAssertEqual(scheduling.events, ["suspend", "enqueue", "resume"])
+        XCTAssertEqual(destinations.closedLeaseCount, 1)
+    }
+
+    func testTranscriptionStopFailurePreventsCaptureAndResumesQueue() async {
+        let capture = FakeCaptureService()
+        let scheduling = TestRecordingTranscriptionScheduler()
+        scheduling.stopFailure = true
+        let controller = makeController(capture: capture, transcriptions: scheduling)
+        await controller.start()
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(controller.state, .failed)
+        XCTAssertEqual(scheduling.events, ["suspend", "resume"])
+    }
+
+    func testPermissionFailureResumesTranscriptionWithoutEnqueue() async {
+        let scheduling = TestRecordingTranscriptionScheduler()
+        let controller = makeController(
+            permissions: FakePermissions(issue: RecordingIssue(code: "permission.denied", message: "Denied")),
+            transcriptions: scheduling
+        )
+        await controller.start()
+        XCTAssertEqual(scheduling.events, ["suspend", "resume"])
+    }
+
     private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -642,7 +678,8 @@ final class RecordingControllerTests: XCTestCase {
         capture: (any CaptureService)? = nil,
         writer: FakeRecordingWriter? = nil,
         recoveryDiscovery: @escaping RecordingController.RecoveryDiscovery = { _ in [] },
-        recoveryNoticeStore: any RecoveryNoticeStoring = MemoryRecoveryNoticeStore()
+        recoveryNoticeStore: any RecoveryNoticeStoring = MemoryRecoveryNoticeStore(),
+        transcriptions: (any RecordingTranscriptionScheduling)? = nil
     ) -> RecordingController {
         let resolvedPermissions = permissions ?? FakePermissions()
         let resolvedDestinations = destinations ?? FakeDestinations()
@@ -654,7 +691,8 @@ final class RecordingControllerTests: XCTestCase {
             captureFactory: { resolvedCapture },
             writerFactory: { resolvedWriter },
             recoveryDiscovery: recoveryDiscovery,
-            recoveryNoticeStore: recoveryNoticeStore
+            recoveryNoticeStore: recoveryNoticeStore,
+            transcriptions: transcriptions
         )
     }
 
@@ -668,6 +706,29 @@ final class RecordingControllerTests: XCTestCase {
             frameCount: frames,
             samples: Array(repeating: [left, right], count: frames).flatMap { $0 }
         )
+    }
+}
+
+@MainActor
+private final class TestRecordingTranscriptionScheduler: RecordingTranscriptionScheduling {
+    var events: [String] = []
+    var stopFailure = false
+    var onEnqueue: (() -> Void)?
+
+    func suspendForRecording() async throws {
+        events.append("suspend")
+        if stopFailure {
+            throw RecordingIssue(code: "transcription.worker-stop-failed", message: "Worker did not stop")
+        }
+    }
+
+    func enqueueRecording(_: RecordingArtifact) async {
+        events.append("enqueue")
+        onEnqueue?()
+    }
+
+    func resumeAfterRecording() {
+        events.append("resume")
     }
 }
 
