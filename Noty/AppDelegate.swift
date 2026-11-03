@@ -14,6 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor [weak self] in await self?.controller.bootstrap() }
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
+        false
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard controller.hasActiveRecording else { return .terminateNow }
         guard !terminationReplyPending else { return .terminateCancel }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var controller: RecordingController
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if showsWarning {
@@ -13,6 +14,11 @@ struct MenuBarView: View {
         }
 
         Divider()
+
+        Button("Open Noty…", systemImage: "macwindow") {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         Button {
             Task { await controller.start() }
