@@ -11,10 +11,6 @@ struct MenuBarView: View {
         } else {
             Text(statusTitle)
         }
-        Text("Recording folder: \(destinationName)")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .help(controller.destinationDisplayPath)
 
         Divider()
 
@@ -52,16 +48,23 @@ struct MenuBarView: View {
                 .font(.caption)
                 .help(issue.message)
             if let recoveryURL = issue.recoveryURL {
-                Button(recoveryURL.isFileURL ? "Show Recovery in Finder" : "Open System Settings") {
+                Button {
                     if recoveryURL.isFileURL {
                         NSWorkspace.shared.activateFileViewerSelecting([recoveryURL])
                     } else {
                         NSWorkspace.shared.open(recoveryURL)
                     }
+                } label: {
+                    Label(
+                        recoveryURL.isFileURL ? "Show Recovery in Finder" : "Open System Settings",
+                        systemImage: recoveryURL.isFileURL ? "arrow.up.forward.app" : "gearshape"
+                    )
                 }
             }
-            Button("Details…") {
+            Button {
                 showDetails(issue)
+            } label: {
+                Label("Details…", systemImage: "info.circle")
             }
         }
 
@@ -82,21 +85,6 @@ struct MenuBarView: View {
         case .interrupted: "Recording interrupted"
         case .failed: "Recording failed"
         }
-    }
-
-    private var destinationName: String {
-        guard let url = controller.currentDestinationURL else { return "Noty" }
-        let components = url.standardizedFileURL.pathComponents
-        let name = url.lastPathComponent
-        let label: String
-        if components.count > 3, components[1] == "Volumes" {
-            label = "\(components[2]) › \(name)"
-        } else {
-            label = name
-        }
-        // Native menus size themselves to their text, so bound unusually long folder names too.
-        guard label.count > 40 else { return label }
-        return "\(label.prefix(19))…\(label.suffix(20))"
     }
 
     private func issueSummary(_ issue: RecordingIssue) -> String {
