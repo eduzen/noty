@@ -44,6 +44,12 @@ struct MainWindowView: View {
         GroupBox {
             VStack(spacing: 18) {
                 RecordingStatusView(state: controller.state, elapsedDuration: controller.elapsedDuration)
+                if controller.hasActiveRecording {
+                    RecordingWaveformView(
+                        level: controller.audioLevel,
+                        isLive: controller.state != .stopping
+                    )
+                }
                 Text(RecordingStatusView.formatDuration(controller.elapsedDuration))
                     .font(.system(size: 44, weight: .medium, design: .monospaced))
                     .contentTransition(.numericText())

@@ -41,6 +41,7 @@ final class RecordingController: ObservableObject {
 
     @Published private(set) var state: RecordingState = .idle
     @Published private(set) var elapsedDuration: TimeInterval = 0
+    @Published private(set) var audioLevel: Double = 0
     @Published private(set) var currentDestinationURL: URL?
     @Published private(set) var lastArtifact: RecordingArtifact?
     @Published private(set) var latestIssue: RecordingIssue?
@@ -61,6 +62,7 @@ final class RecordingController: ObservableObject {
     private var captureTask: Task<AudioMixer, Never>?
     private var terminationTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
+    private var levelPublishTask: Task<Void, Never>?
     private var finalizationTask: Task<RecordingOutcome, Never>?
     private var lastOutcome: RecordingOutcome?
     private var pendingFailure: (issue: RecordingIssue, state: RecordingState)?
@@ -70,6 +72,7 @@ final class RecordingController: ObservableObject {
     private var stopRequested = false
     private var didBootstrap = false
     private var lifecycleRevision: UInt64 = 0
+    private let audioMeter = RecordingAudioMeter()
 
     init(
         permissions: any RecordingPermissionPreparing = PermissionCoordinator(),
@@ -159,6 +162,7 @@ final class RecordingController: ObservableObject {
         systemAudioHasBeenHeard = false
         elapsedDuration = 0
         state = .starting
+        startAudioLevelPublishing()
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.startOperation()
@@ -299,6 +303,7 @@ extension RecordingController {
 
     private func cancelStartup() async {
         state = .stopping
+        stopAudioLevelPublishing()
         timerTask?.cancel()
         captureTask?.cancel()
         terminationTask?.cancel()
@@ -329,6 +334,7 @@ extension RecordingController {
     }
 
     private func failStartup(_ issue: RecordingIssue) async {
+        stopAudioLevelPublishing()
         timerTask?.cancel()
         captureTask?.cancel()
         terminationTask?.cancel()
@@ -357,9 +363,9 @@ extension RecordingController {
         let packets = capture.packets
         // UI work must not stall the bounded audio stream.
         let revision = lifecycleRevision
-        captureTask = Task.detached(priority: .userInitiated) { [weak self] in
+        captureTask = Task.detached(priority: .userInitiated) { [weak self, meter = audioMeter] in
             guard let self else { return AudioMixer() }
-            return await self.consumePackets(from: packets, writer: writer, revision: revision)
+            return await self.consumePackets(from: packets, writer: writer, revision: revision, meter: meter)
         }
         terminationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -370,7 +376,8 @@ extension RecordingController {
     private nonisolated func consumePackets(
         from packets: AsyncThrowingStream<CapturedAudioPacket, Error>,
         writer: any RecordingWriting,
-        revision: UInt64
+        revision: UInt64,
+        meter: RecordingAudioMeter
     ) async -> AudioMixer {
         var mixer = AudioMixer()
         let normalizer = AudioNormalizer()
@@ -384,7 +391,12 @@ extension RecordingController {
                 } else if !hadAudio, silenceMonitor.heardAudio {
                     Task { await self.updateSystemAudioStatus(isAudible: true, revision: revision) }
                 }
-                try await appendNormalizedPackets(normalizer.normalize(packet), to: &mixer, writer: writer)
+                try await appendNormalizedPackets(
+                    normalizer.normalize(packet),
+                    to: &mixer,
+                    writer: writer,
+                    meter: meter
+                )
             }
         } catch {
             failure = error
@@ -393,7 +405,7 @@ extension RecordingController {
         let canDrain = failure.map { RecordingIssueMapper.issue(from: $0).code.hasPrefix("capture.") } ?? true
         if !Task.isCancelled, canDrain {
             do {
-                try await appendNormalizedPackets(normalizer.finish(), to: &mixer, writer: writer)
+                try await appendNormalizedPackets(normalizer.finish(), to: &mixer, writer: writer, meter: meter)
             } catch {
                 failure = error
             }
@@ -405,10 +417,12 @@ extension RecordingController {
     private nonisolated func appendNormalizedPackets(
         _ packets: [NormalizedAudioPacket],
         to mixer: inout AudioMixer,
-        writer: any RecordingWriting
+        writer: any RecordingWriting,
+        meter: RecordingAudioMeter
     ) async throws {
         for packet in packets {
             for chunk in try mixer.append(packet) {
+                meter.observe(samples: chunk.samples)
                 try await writer.append(chunk)
             }
         }
@@ -504,6 +518,7 @@ extension RecordingController {
         }
         state = .stopping
         timerTask?.cancel()
+        stopAudioLevelPublishing()
         if let recordingStartUptime {
             elapsedDuration = max(0, ProcessInfo.processInfo.systemUptime - recordingStartUptime)
         }
@@ -601,6 +616,7 @@ extension RecordingController {
         captureTask = nil
         recordingStartUptime = nil
         mixer = AudioMixer()
+        stopAudioLevelPublishing()
         transcriptions?.resumeAfterRecording()
     }
 
@@ -613,6 +629,26 @@ extension RecordingController {
                 self.elapsedDuration = max(0, ProcessInfo.processInfo.systemUptime - start)
             }
         }
+    }
+
+    private func startAudioLevelPublishing() {
+        levelPublishTask?.cancel()
+        audioMeter.reset()
+        audioLevel = 0
+        levelPublishTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 50_000_000) } catch { return }
+                guard let self, self.state == .starting || self.state == .recording else { return }
+                self.audioLevel = Double(self.audioMeter.sampleAndDecay())
+            }
+        }
+    }
+
+    private func stopAudioLevelPublishing() {
+        levelPublishTask?.cancel()
+        levelPublishTask = nil
+        audioMeter.reset()
+        audioLevel = 0
     }
 
     private func terminalState(for issue: RecordingIssue) -> RecordingState {
