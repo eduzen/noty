@@ -10,11 +10,13 @@ actor RecordingWriter {
     private let fileSystem: RecordingMediaFileSystem
     private let recoverySegmentDuration: TimeInterval
     private let now: () -> Date
+    private let recoveryNoticeStore: any RecoveryNoticeStoring
     private var state: State = .idle
     private var writer: RecordingMediaWriter?
     private var temporaryURL: URL?
     private var recoveryStore: RecoverySegmentStore?
     private var destinationFolder: URL?
+    private var recordingName: String?
     private var lastPresentationTime: TimeInterval?
     private var finishTask: Task<RecordingArtifact, Error>?
     private var failTask: Task<RecordingOutcome, Never>?
@@ -25,12 +27,14 @@ actor RecordingWriter {
          validator: RecordingMediaValidating = MediaValidator(),
          fileSystem: RecordingMediaFileSystem = LocalRecordingMediaFileSystem(),
          recoverySegmentDuration: TimeInterval = 30,
-         now: @escaping () -> Date = Date.init) {
+         now: @escaping () -> Date = Date.init,
+         recoveryNoticeStore: any RecoveryNoticeStoring = RecoveryNoticeStore()) {
         self.factory = factory
         self.validator = validator
         self.fileSystem = fileSystem
         self.recoverySegmentDuration = recoverySegmentDuration
         self.now = now
+        self.recoveryNoticeStore = recoveryNoticeStore
     }
 
     func start(at destinationURL: URL) async throws {
@@ -40,6 +44,12 @@ actor RecordingWriter {
         do {
             try fileSystem.createDirectory(at: destinationURL)
             destinationFolder = destinationURL
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "EEE-dd-MM-yy-HH.mm"
+            let recordingName = formatter.string(from: now()).lowercased()
+            self.recordingName = recordingName
             let id = UUID().uuidString
             let temp = destinationURL.appendingPathComponent(".noty-\(id).tmp.m4a")
             let recoveryDirectory = destinationURL.appendingPathComponent(".noty-recovery-\(id)", isDirectory: true)
@@ -47,11 +57,17 @@ actor RecordingWriter {
             writer = try factory.makeWriter(at: temp)
             temporaryURL = temp
             recoveryStore = RecoverySegmentStore(directoryURL: recoveryDirectory, factory: factory,
-                                                 fileSystem: fileSystem, segmentDuration: recoverySegmentDuration)
+                                                 fileSystem: fileSystem, filenamePrefix: recordingName,
+                                                 segmentDuration: recoverySegmentDuration,
+                                                 noticeStore: recoveryNoticeStore)
             state = .active
         } catch {
             throw asIssue(error, code: "writer.start-failed", message: "Noty could not start the recording.")
         }
+    }
+
+    func recoverySessionIdentifier() -> String? {
+        recoveryStore?.directoryURL.path
     }
 
     func append(_ chunk: MixedAudioChunk) async throws {
@@ -142,7 +158,7 @@ actor RecordingWriter {
     }
 
     private func finalize() async throws -> RecordingArtifact {
-        guard let writer, let temporaryURL, let destinationFolder else {
+        guard let writer, let temporaryURL, let destinationFolder, let recordingName else {
             let error = issue("writer.invalid-state", "The recording writer could not finalize its output.")
             state = .failed(.failed(error))
             finishTask = nil
@@ -153,11 +169,11 @@ actor RecordingWriter {
             self.writer = nil
             try await recoveryStore?.closeCurrent()
             let validatedDuration = try await validator.validate(url: temporaryURL)
-            let finalURL = uniqueFinalURL(in: destinationFolder)
+            let finalURL = uniqueFinalURL(in: destinationFolder, name: recordingName)
             try fileSystem.moveItem(at: temporaryURL, to: finalURL)
             let artifact = RecordingArtifact(url: finalURL, kind: .recording, duration: validatedDuration)
             state = .finished(artifact)
-            try? recoveryStore?.cleanup()
+            recoveryStore?.cleanupAfterSuccessfulSave()
             finishTask = nil
             return artifact
         } catch {
@@ -185,29 +201,29 @@ actor RecordingWriter {
         writer?.cancel()
         writer = nil
         await recoveryStore?.closeBestEffort()
-        var candidates: [(URL, TimeInterval)] = []
         if let temporaryURL, let time = try? await validator.validate(url: temporaryURL) {
-            candidates.append((temporaryURL, time))
+            let artifact = RecordingArtifact(url: temporaryURL, duration: time,
+                                             recoverySessionIdentifier: recoveryStore?.directoryURL.path)
+            return .partial(artifact, issue.withRecordingURL(artifact.url))
         }
+        var parts: [(url: URL, duration: TimeInterval)] = []
         for url in recoveryStore?.completedURLs ?? [] {
             if let time = try? await validator.validate(url: url) {
-                candidates.append((url, time))
+                parts.append((url, time))
             }
         }
-        guard let best = candidates.max(by: { $0.1 < $1.1 }) else { return .failed(issue) }
-        let kind: RecordingArtifact.Kind = best.0 == temporaryURL ? .recording : .recovery
-        return .partial(RecordingArtifact(url: best.0, kind: kind, duration: best.1), issue)
+        guard let artifact = RecordingArtifact(recoveryParts: parts) else {
+            return .failed(issue.withRecordingURL(nil))
+        }
+        return .partial(artifact, issue.withRecordingURL(artifact.url))
     }
 
-    private func uniqueFinalURL(in folder: URL) -> URL {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd-HHmmss-SSS"
-        var url = folder.appendingPathComponent("Noty-\(formatter.string(from: now())).m4a")
+    private func uniqueFinalURL(in folder: URL, name: String) -> URL {
+        var url = folder.appendingPathComponent("\(name).m4a")
+        var suffix = 2
         while fileSystem.fileExists(at: url) {
-            url = folder
-                .appendingPathComponent("Noty-\(formatter.string(from: now()))-\(UUID().uuidString.prefix(8)).m4a")
+            url = folder.appendingPathComponent("\(name)-\(suffix).m4a")
+            suffix += 1
         }
         return url
     }

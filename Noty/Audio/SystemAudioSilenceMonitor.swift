@@ -11,16 +11,17 @@ struct SystemAudioSilenceMonitor {
     static let silenceLevel: Float = 0.0001
 
     private var firstTime: TimeInterval?
-    private var heardAudio = false
+    private(set) var heardAudio = false
     private var reported = false
 
     /// Returns `true` exactly once: when `threshold` seconds of system audio have passed with no signal.
     mutating func observe(_ packet: CapturedAudioPacket) -> Bool {
-        guard packet.source == .system, !heardAudio, !reported else { return false }
+        guard packet.source == .system, !heardAudio else { return false }
         if packet.samples.contains(where: { abs($0) > Self.silenceLevel }) {
             heardAudio = true
             return false
         }
+        guard !reported else { return false }
         let start = firstTime ?? packet.presentationTime
         firstTime = start
         let end = packet.presentationTime + Double(packet.frameCount) / packet.sampleRate

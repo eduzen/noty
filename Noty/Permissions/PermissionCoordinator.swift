@@ -55,7 +55,7 @@ struct PermissionCoordinator {
             throw RecordingIssue(
                 code: "permission.audio-input-entitlement-missing",
                 message: """
-                Noty is missing its Audio Input entitlement. Reinstall or rebuild Noty with Audio Input enabled.
+                This copy of Noty can’t use the microphone. Reinstall Noty and try again.
                 """,
                 isRetryAllowed: false
             )

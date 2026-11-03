@@ -22,6 +22,13 @@ protocol RecordingWriting: Sendable {
     func append(_ chunk: MixedAudioChunk) async throws
     func finish() async throws -> RecordingArtifact
     func fail(_ issue: RecordingIssue) async -> RecordingOutcome
+    func recoverySessionIdentifier() async -> String?
+}
+
+extension RecordingWriting {
+    func recoverySessionIdentifier() async -> String? {
+        nil
+    }
 }
 
 extension RecordingWriter: RecordingWriting {}
@@ -37,12 +44,14 @@ final class RecordingController: ObservableObject {
     @Published private(set) var currentDestinationURL: URL?
     @Published private(set) var lastArtifact: RecordingArtifact?
     @Published private(set) var latestIssue: RecordingIssue?
+    @Published private(set) var recoveredRecordings: [RecordingArtifact] = []
 
     private let permissions: any RecordingPermissionPreparing
     private let destinations: any RecordingDestinationManaging
     private let captureFactory: CaptureFactory
     private let writerFactory: WriterFactory
     private let recoveryDiscovery: RecoveryDiscovery
+    private let recoveryNoticeStore: any RecoveryNoticeStoring
     private var destinationLease: DestinationLease?
     private var capture: CaptureService?
     private var writer: (any RecordingWriting)?
@@ -55,6 +64,8 @@ final class RecordingController: ObservableObject {
     private var lastOutcome: RecordingOutcome?
     private var pendingFailure: (issue: RecordingIssue, state: RecordingState)?
     private var recordingStartUptime: TimeInterval?
+    private var systemAudioHasBeenHeard = false
+    private var startedRecoverySessions: Set<String> = []
     private var stopRequested = false
     private var didBootstrap = false
     private var lifecycleRevision: UInt64 = 0
@@ -70,13 +81,15 @@ final class RecordingController: ObservableObject {
                 validator: MediaValidator(),
                 fileSystem: LocalRecordingMediaFileSystem()
             )
-        }
+        },
+        recoveryNoticeStore: any RecoveryNoticeStoring = RecoveryNoticeStore()
     ) {
         self.permissions = permissions
         self.destinations = destinations
         self.captureFactory = captureFactory
         self.writerFactory = writerFactory
         self.recoveryDiscovery = recoveryDiscovery
+        self.recoveryNoticeStore = recoveryNoticeStore
     }
 
     var canStart: Bool {
@@ -111,16 +124,20 @@ final class RecordingController: ObservableObject {
                 currentDestinationURL = lease.url
             }
             let recoveries = await recoveryDiscovery(lease.url)
+            guard currentDestinationURL == nil || currentDestinationURL == lease.url else { return }
+            for artifact in recoveries {
+                let identifier = artifact.recoveryIdentifier
+                guard !recoveryNoticeStore.isAcknowledged(identifier),
+                      !startedRecoverySessions.contains(identifier),
+                      !recoveredRecordings.contains(where: { $0.recoveryIdentifier == identifier }) else { continue }
+                recoveredRecordings.append(artifact)
+            }
+            // Discovery may finish after a new recording starts. Keep old sessions available without
+            // replacing the active recording's state, issue, or latest saved file.
             guard isInitialIdle, lifecycleRevision == revision else { return }
-            if let artifact = recoveries.max(by: { $0.duration < $1.duration }) {
+            if let artifact = recoveredRecordings.max(by: { $0.duration < $1.duration }) {
                 lastArtifact = artifact
-                latestIssue = RecordingIssue(
-                    code: "recording.recovery-found",
-                    message: "Noty found a recoverable recording segment at \(artifact.url.path).",
-                    recoveryURL: artifact.url,
-                    isRetryAllowed: false
-                )
-                state = .interrupted
+                updateRecoveryNotice()
             }
         } catch {
             guard isInitialIdle, lifecycleRevision == revision else { return }
@@ -136,6 +153,7 @@ final class RecordingController: ObservableObject {
         finalizationTask = nil
         lastOutcome = nil
         latestIssue = nil
+        systemAudioHasBeenHeard = false
         elapsedDuration = 0
         state = .starting
         let task = Task { @MainActor [weak self] in
@@ -191,7 +209,47 @@ final class RecordingController: ObservableObject {
 
     func revealLastRecordingInFinder() {
         guard let lastArtifact else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([lastArtifact.url])
+        revealRecordingInFinder(lastArtifact)
+    }
+
+    func revealRecordingInFinder(_ artifact: RecordingArtifact) {
+        NSWorkspace.shared.activateFileViewerSelecting(artifact.fileURLs)
+    }
+
+    func recordingURLs(for issue: RecordingIssue) -> [URL] {
+        guard let url = issue.recoveryURL, url.isFileURL else { return [] }
+        let artifacts = recoveredRecordings + [lastArtifact].compactMap { $0 }
+        return artifacts.first(where: { $0.fileURLs.contains(url) })?.fileURLs ?? [url]
+    }
+
+    func openIssueAction(_ issue: RecordingIssue) {
+        guard let url = issue.recoveryURL else { return }
+        if url.isFileURL {
+            NSWorkspace.shared.activateFileViewerSelecting(recordingURLs(for: issue))
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func dismissRecovery(_ artifact: RecordingArtifact) {
+        recoveryNoticeStore.acknowledge(artifact.recoveryIdentifier)
+        recoveredRecordings.removeAll { $0.recoveryIdentifier == artifact.recoveryIdentifier }
+        if latestIssue?.code == "recording.recovery-found" {
+            updateRecoveryNotice()
+        }
+    }
+
+    private func updateRecoveryNotice() {
+        guard !recoveredRecordings.isEmpty else {
+            latestIssue = nil
+            return
+        }
+        latestIssue = RecordingIssue(
+            code: "recording.recovery-found",
+            message: "Audio from an earlier recording is available. Review the recovered recordings below. "
+                + "Each recording may contain several audio files. Dismissing this notice keeps the audio.",
+            recoveryURL: recoveredRecordings.first?.url
+        )
     }
 }
 
@@ -209,6 +267,9 @@ extension RecordingController {
             let writer = writerFactory()
             self.writer = writer
             try await writer.start(at: lease.url)
+            if let identifier = await writer.recoverySessionIdentifier() {
+                startedRecoverySessions.insert(identifier)
+            }
             guard !stopRequested else { await cancelStartup(); return }
 
             let capture = captureFactory()
@@ -288,9 +349,10 @@ extension RecordingController {
     private func startCaptureTasks(_ capture: CaptureService, writer: any RecordingWriting) {
         let packets = capture.packets
         // UI work must not stall the bounded audio stream.
+        let revision = lifecycleRevision
         captureTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return AudioMixer() }
-            return await self.consumePackets(from: packets, writer: writer)
+            return await self.consumePackets(from: packets, writer: writer, revision: revision)
         }
         terminationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -300,7 +362,8 @@ extension RecordingController {
 
     private nonisolated func consumePackets(
         from packets: AsyncThrowingStream<CapturedAudioPacket, Error>,
-        writer: any RecordingWriting
+        writer: any RecordingWriting,
+        revision: UInt64
     ) async -> AudioMixer {
         var mixer = AudioMixer()
         let normalizer = AudioNormalizer()
@@ -308,8 +371,11 @@ extension RecordingController {
         var failure: Error?
         do {
             for try await packet in packets {
+                let hadAudio = silenceMonitor.heardAudio
                 if silenceMonitor.observe(packet) {
-                    await reportSilentSystemAudio()
+                    Task { await self.updateSystemAudioStatus(isAudible: false, revision: revision) }
+                } else if !hadAudio, silenceMonitor.heardAudio {
+                    Task { await self.updateSystemAudioStatus(isAudible: true, revision: revision) }
                 }
                 try await appendNormalizedPackets(normalizer.normalize(packet), to: &mixer, writer: writer)
             }
@@ -341,15 +407,22 @@ extension RecordingController {
         }
     }
 
-    /// Warns, but keeps recording: silence may also mean nothing is playing.
-    private func reportSilentSystemAudio() {
-        guard state == .recording, latestIssue == nil else { return }
+    /// UI notices must never hold up the bounded audio stream.
+    private func updateSystemAudioStatus(isAudible: Bool, revision: UInt64) {
+        guard lifecycleRevision == revision else { return }
+        if isAudible {
+            systemAudioHasBeenHeard = true
+            if latestIssue?.code == "capture.system-audio-silent" {
+                latestIssue = nil
+            }
+            return
+        }
+        guard state == .recording, !systemAudioHasBeenHeard, latestIssue == nil else { return }
         latestIssue = RecordingIssue(
             code: "capture.system-audio-silent",
             message: """
-            No system audio has been detected for \(Int(SystemAudioSilenceMonitor.threshold)) seconds. \
-            If something is playing, allow Noty under System Settings → Privacy & Security \
-            → System Audio Recording Only.
+            No system audio has been detected yet. If something is playing, allow Noty in System Settings → \
+            Privacy & Security → System Audio Recording Only. Microphone recording is continuing.
             """,
             recoveryURL: CaptureSettingsLinks.systemAudio,
             isRetryAllowed: true
@@ -388,7 +461,7 @@ extension RecordingController {
             case let .systemAudioDenied(value), let .interrupted(value), let .microphoneDisconnected(value),
                  let .unexpected(value),
                  let .queueOverflow(value):
-                issue = value
+                issue = self.issue(from: value)
             }
             guard state == .starting || state == .recording || state == .stopping else { return }
             scheduleFinalization(issue: issue, terminalState: terminalState(for: issue))
@@ -496,11 +569,13 @@ extension RecordingController {
         case let .partial(artifact, issue):
             if let artifact {
                 lastArtifact = artifact
+                recoveredRecordings.removeAll { $0.recoveryIdentifier == artifact.recoveryIdentifier }
+                recoveredRecordings.append(artifact)
             }
-            latestIssue = issue
+            latestIssue = self.issue(from: issue)
             state = terminalState ?? .interrupted
         case let .failed(issue):
-            latestIssue = issue
+            latestIssue = self.issue(from: issue.withRecordingURL(nil))
             state = terminalState ?? .failed
         }
     }

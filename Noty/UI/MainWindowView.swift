@@ -13,6 +13,7 @@ struct MainWindowView: View {
                 if let issue = controller.latestIssue {
                     issueView(issue)
                 }
+                RecoveredRecordingsView(controller: controller)
                 settings
                 lastRecording
             }
@@ -94,7 +95,7 @@ struct MainWindowView: View {
             GroupBox("Last recording") {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(artifact.url.lastPathComponent)
+                        Text(artifact.displayName)
                             .lineLimit(2)
                         Text("Show the saved file in Finder.")
                             .font(.caption)
@@ -109,21 +110,21 @@ struct MainWindowView: View {
     }
 
     private func issueView(_ issue: RecordingIssue) -> some View {
-        GroupBox {
+        let isRecoveryNotice = issue.code == "recording.recovery-found"
+        return GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Label("Recording needs attention", systemImage: "exclamationmark.triangle.fill")
-                    .font(.headline)
-                    .foregroundStyle(.orange)
+                Label(
+                    isRecoveryNotice ? "Partial recording available" : "Recording needs attention",
+                    systemImage: isRecoveryNotice ? "info.circle" : "exclamationmark.triangle.fill"
+                )
+                .font(.headline)
+                .foregroundStyle(isRecoveryNotice ? Color.secondary : .orange)
                 Text(issue.message)
                     .font(.callout)
                     .textSelection(.enabled)
                 if let url = issue.recoveryURL {
-                    Button(url.isFileURL ? "Show Recovery in Finder" : "Open System Settings") {
-                        if url.isFileURL {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        } else {
-                            NSWorkspace.shared.open(url)
-                        }
+                    Button(url.isFileURL ? "Show Recording in Finder" : "Open System Settings") {
+                        controller.openIssueAction(issue)
                     }
                 }
             }

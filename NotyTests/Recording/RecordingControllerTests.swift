@@ -115,7 +115,7 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(snapshot.startCount, 0)
     }
 
-    func testCaptureStartupFailureDisplaysOriginalDiagnostic() async {
+    func testCaptureStartupFailureDisplaysHelpfulMessageWithoutFrameworkDiagnostic() async {
         let message = "System audio capture could not create process tap (OSStatus 1852797029)."
         let backend = StartupFailingAudioBackend(error: CaptureServiceError.streamFailure(message))
         let writer = FakeRecordingWriter()
@@ -125,7 +125,7 @@ final class RecordingControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.state, .interrupted)
         XCTAssertEqual(controller.latestIssue?.code, "capture.stream-failed")
-        XCTAssertEqual(controller.latestIssue?.message, message)
+        XCTAssertFalse(controller.latestIssue?.message.contains("OSStatus") ?? true)
         XCTAssertNil(controller.latestIssue?.recoveryURL)
         XCTAssertEqual(backend.stopCount, 1)
     }
@@ -185,7 +185,7 @@ final class RecordingControllerTests: XCTestCase {
         await controller.stop()
 
         XCTAssertEqual(controller.state, .failed)
-        XCTAssertEqual(controller.latestIssue, issue)
+        XCTAssertEqual(controller.latestIssue?.code, issue.code)
         XCTAssertEqual(controller.lastArtifact, artifact)
         XCTAssertEqual(capture.stopCount, 1)
     }
@@ -270,6 +270,10 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertTrue(warned)
         XCTAssertEqual(controller.state, .recording)
         XCTAssertEqual(controller.latestIssue?.recoveryURL, CaptureSettingsLinks.systemAudio)
+        capture.emit(packet(source: .system, time: 8, frames: 48000, left: 0.3, right: 0.2))
+        let cleared = await waitUntil { controller.latestIssue == nil }
+        XCTAssertTrue(cleared)
+        XCTAssertEqual(controller.state, .recording)
         await controller.stop()
         XCTAssertEqual(controller.state, .idle)
         XCTAssertNil(controller.latestIssue)
@@ -279,7 +283,11 @@ final class RecordingControllerTests: XCTestCase {
         let discoveryGate = AsyncControllerGate()
         let destinations = FakeDestinations()
         let capture = FakeCaptureService()
-        let writer = FakeRecordingWriter()
+        let active = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/.noty-recovery-active/segment-000001.m4a"),
+            kind: .recovery, duration: 1
+        )
+        let writer = FakeRecordingWriter(recoverySessionID: active.recoveryIdentifier)
         let orphan = recoveryArtifact()
         let controller = makeController(
             destinations: destinations,
@@ -287,7 +295,7 @@ final class RecordingControllerTests: XCTestCase {
             writer: writer,
             recoveryDiscovery: { _ in
                 await discoveryGate.wait()
-                return [orphan]
+                return [orphan, active]
             }
         )
         let bootstrapping = Task { await controller.bootstrap() }
@@ -299,6 +307,7 @@ final class RecordingControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.state, .recording)
         XCTAssertTrue(controller.canStop)
+        XCTAssertEqual(controller.recoveredRecordings, [orphan])
         XCTAssertNil(controller.latestIssue)
         XCTAssertNil(controller.lastArtifact)
         XCTAssertEqual(destinations.closedLeaseCount, 1)
@@ -503,7 +512,8 @@ final class RecordingControllerTests: XCTestCase {
         await bootstrapping.value
         await controller.bootstrap()
 
-        XCTAssertEqual(controller.state, .interrupted)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertTrue(controller.canStart)
         XCTAssertEqual(controller.lastArtifact, orphan)
         XCTAssertEqual(controller.latestIssue?.code, "recording.recovery-found")
         XCTAssertEqual(controller.latestIssue?.recoveryURL, orphan.url)
@@ -562,6 +572,51 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(destinations.closedLeaseCount, 1)
     }
 
+    func testRecoveredSessionsRemainAvailableDuringRecordingAndDismissalSurvivesRelaunch() async {
+        let store = MemoryRecoveryNoticeStore()
+        let first = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/.noty-recovery-first/segment-000001.m4a"),
+            kind: .recovery, duration: 60,
+            additionalURLs: [URL(fileURLWithPath: "/recordings/.noty-recovery-first/segment-000002.m4a")]
+        )
+        let second = RecordingArtifact(
+            url: URL(fileURLWithPath: "/recordings/.noty-recovery-second/segment-000001.m4a"),
+            kind: .recovery, duration: 30
+        )
+        let controller = makeController(recoveryDiscovery: { _ in [first, second] }, recoveryNoticeStore: store)
+        await controller.bootstrap()
+        XCTAssertEqual(controller.recoveredRecordings, [first, second])
+        let action = RecordingIssue(code: "recording.recovery-found", message: "", recoveryURL: first.url)
+        XCTAssertEqual(controller.recordingURLs(for: action), first.fileURLs)
+        await controller.start()
+        XCTAssertEqual(controller.recoveredRecordings, [first, second])
+        await controller.stop()
+        controller.dismissRecovery(first)
+        XCTAssertEqual(controller.recoveredRecordings, [second])
+        let relaunched = makeController(recoveryDiscovery: { _ in [first, second] }, recoveryNoticeStore: store)
+        await relaunched.bootstrap()
+        XCTAssertEqual(relaunched.recoveredRecordings, [second])
+        relaunched.dismissRecovery(second)
+        XCTAssertTrue(relaunched.recoveredRecordings.isEmpty)
+        XCTAssertNil(relaunched.latestIssue)
+        XCTAssertTrue(relaunched.canStart)
+    }
+
+    func testDismissingOldRecoveryDoesNotHideNewPermissionFailure() async {
+        let artifact = recoveryArtifact()
+        let failure = RecordingIssue(code: "permission.microphone-denied", message: "Allow microphone access.",
+                                     recoveryURL: CaptureSettingsLinks.systemAudio)
+        let controller = makeController(
+            permissions: FakePermissions(issue: failure),
+            recoveryDiscovery: { _ in [artifact] }
+        )
+        await controller.bootstrap()
+        await controller.start()
+        controller.dismissRecovery(artifact)
+        XCTAssertEqual(controller.latestIssue, failure)
+        XCTAssertEqual(controller.state, .failed)
+    }
+
     private func recoveryArtifact() -> RecordingArtifact {
         RecordingArtifact(
             url: URL(fileURLWithPath: "/recordings/orphan-recovery.m4a"),
@@ -586,7 +641,8 @@ final class RecordingControllerTests: XCTestCase {
         destinations: FakeDestinations? = nil,
         capture: (any CaptureService)? = nil,
         writer: FakeRecordingWriter? = nil,
-        recoveryDiscovery: @escaping RecordingController.RecoveryDiscovery = { _ in [] }
+        recoveryDiscovery: @escaping RecordingController.RecoveryDiscovery = { _ in [] },
+        recoveryNoticeStore: any RecoveryNoticeStoring = MemoryRecoveryNoticeStore()
     ) -> RecordingController {
         let resolvedPermissions = permissions ?? FakePermissions()
         let resolvedDestinations = destinations ?? FakeDestinations()
@@ -597,7 +653,8 @@ final class RecordingControllerTests: XCTestCase {
             destinations: resolvedDestinations,
             captureFactory: { resolvedCapture },
             writerFactory: { resolvedWriter },
-            recoveryDiscovery: recoveryDiscovery
+            recoveryDiscovery: recoveryDiscovery,
+            recoveryNoticeStore: recoveryNoticeStore
         )
     }
 
@@ -733,6 +790,7 @@ private actor FakeRecordingWriter: RecordingWriting {
     private let appendIssue: RecordingIssue?
     private let failureOutcome: RecordingOutcome?
     private let onAppend: (@Sendable () -> Void)?
+    private let recoverySessionID: String?
     private var finishGate: AsyncControllerGate?
     private var startCount = 0
     private var appendCount = 0
@@ -742,10 +800,15 @@ private actor FakeRecordingWriter: RecordingWriting {
     private var failureWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(appendIssue: RecordingIssue? = nil, failureOutcome: RecordingOutcome? = nil,
-         onAppend: (@Sendable () -> Void)? = nil) {
+         onAppend: (@Sendable () -> Void)? = nil, recoverySessionID: String? = nil) {
         self.appendIssue = appendIssue
         self.failureOutcome = failureOutcome
         self.onAppend = onAppend
+        self.recoverySessionID = recoverySessionID
+    }
+
+    func recoverySessionIdentifier() -> String? {
+        recoverySessionID
     }
 
     func start(at _: URL) async throws {

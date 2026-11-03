@@ -50,19 +50,18 @@ struct MenuBarView: View {
 
         if let issue = controller.latestIssue {
             Divider()
-            Label(issueSummary(issue), systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .help(issue.message)
+            Label(
+                issueSummary(issue),
+                systemImage: issue.code == "recording.recovery-found" ? "info.circle" : "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .help(issue.message)
             if let recoveryURL = issue.recoveryURL {
                 Button {
-                    if recoveryURL.isFileURL {
-                        NSWorkspace.shared.activateFileViewerSelecting([recoveryURL])
-                    } else {
-                        NSWorkspace.shared.open(recoveryURL)
-                    }
+                    controller.openIssueAction(issue)
                 } label: {
                     Label(
-                        recoveryURL.isFileURL ? "Show Recovery in Finder" : "Open System Settings",
+                        recoveryURL.isFileURL ? "Show Recording in Finder" : "Open System Settings",
                         systemImage: recoveryURL.isFileURL ? "arrow.up.forward.app" : "gearshape"
                     )
                 }
@@ -71,6 +70,22 @@ struct MenuBarView: View {
                 showDetails(issue)
             } label: {
                 Label("Details…", systemImage: "info.circle")
+            }
+        }
+
+        if !controller.recoveredRecordings.isEmpty {
+            Divider()
+            Menu("Recovered Recordings") {
+                ForEach(controller.recoveredRecordings, id: \.recoveryIdentifier) { artifact in
+                    Menu(artifact.displayName) {
+                        Text(
+                            "\(artifact.fileCountDescription) · "
+                                + "\(RecordingStatusView.formatDuration(artifact.duration))"
+                        )
+                        Button("Show Audio in Finder") { controller.revealRecordingInFinder(artifact) }
+                        Button("Dismiss Notice") { controller.dismissRecovery(artifact) }
+                    }
+                }
             }
         }
 
@@ -103,13 +118,9 @@ struct MenuBarView: View {
 
     private func showDetails(_ issue: RecordingIssue) {
         let alert = NSAlert()
-        alert.alertStyle = .warning
+        alert.alertStyle = issue.code == "recording.recovery-found" ? .informational : .warning
         alert.messageText = issueSummary(issue)
-        var details = issue.message
-        if let url = issue.recoveryURL, url.isFileURL, !details.contains(url.path) {
-            details += "\n\nRecovery file: \(url.path)"
-        }
-        alert.informativeText = details
+        alert.informativeText = issue.message
         alert.addButton(withTitle: "OK")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()

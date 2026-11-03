@@ -86,7 +86,8 @@ final class PermissionCoordinatorTests: XCTestCase {
             XCTFail("Expected missing entitlement issue")
         } catch let issue as RecordingIssue {
             XCTAssertEqual(issue.code, "permission.audio-input-entitlement-missing")
-            XCTAssertTrue(issue.message.contains("Audio Input"))
+            XCTAssertTrue(issue.message.contains("Reinstall Noty"))
+            XCTAssertFalse(issue.message.contains("entitlement"))
         } catch { XCTFail("Unexpected error: \(error)") }
     }
 }

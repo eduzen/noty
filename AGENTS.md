@@ -29,7 +29,9 @@ Use the `justfile` from the repository root:
 - `just format` — run `prek` hooks, including SwiftFormat and SwiftLint.
 - `just run` / `just quit` — launch or quit the built app.
 
-The project requires macOS 15.0 or newer and uses Swift 5 mode. System audio and microphone behavior cannot be fully validated without the corresponding macOS permissions (System Audio Recording Only and Microphone). Noty does not use Screen Recording.
+Target the latest stable macOS release, Xcode, macOS SDK, and Swift language mode. Supporting older versions is not required unless explicitly requested. Existing deployment targets or Swift compatibility settings are implementation state, not compatibility requirements; keep documentation accurate when migrating them.
+
+System audio and microphone behavior cannot be fully validated without the corresponding macOS permissions (System Audio Recording Only and Microphone). Noty does not use Screen Recording.
 
 ## Implementation notes
 

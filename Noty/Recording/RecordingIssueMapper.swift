@@ -1,17 +1,65 @@
 import Foundation
+import OSLog
 
 enum RecordingIssueMapper {
+    private static let logger = Logger(subsystem: "com.eduzen.noty", category: "Recording")
+
     static func issue(from error: Error) -> RecordingIssue {
+        let original: RecordingIssue
         if let issue = error as? RecordingIssue {
-            return issue
+            original = issue
+        } else if let error = error as? AudioPipelineError {
+            original = audioIssue(for: error)
+        } else if let error = error as? CaptureServiceError {
+            original = captureIssue(for: error)
+        } else {
+            original = RecordingIssue(
+                code: "recording.failed",
+                message: error.localizedDescription,
+                isRetryAllowed: true
+            )
         }
-        if let error = error as? AudioPipelineError {
-            return audioIssue(for: error)
+        let message = userMessage(for: original)
+        if message != original.message {
+            logger.error("\(original.code, privacy: .public): \(original.message, privacy: .private)")
         }
-        if let error = error as? CaptureServiceError {
-            return captureIssue(for: error)
+        return RecordingIssue(code: original.code, message: message, recoveryURL: original.recoveryURL,
+                              isRetryAllowed: original.isRetryAllowed)
+    }
+
+    private static func userMessage(for issue: RecordingIssue) -> String {
+        switch issue.code {
+        case "audio.queue-overflow", "capture.queue-overflow", "writer.overflow", "writer.backpressure":
+            return "Recording stopped because Noty couldn’t process the audio fast enough. "
+                + "Try closing busy apps before recording again."
+        case "audio.malformed-packet", "audio.conversion-failed", "audio.timing-discontinuity":
+            return "Recording stopped because Noty couldn’t process the audio. Try recording again."
+        case "audio.unsupported-format", "capture.invalid-audio":
+            return "Noty couldn’t use this audio device. "
+                + "Choose another device in Sound settings and try again."
+        case "capture.stream-failed", "capture.setup-failed", "capture.lifecycle-error":
+            return "Noty couldn’t capture audio. "
+                + "Check that your audio devices are connected and try recording again."
+        case "permission.audio-input-entitlement-missing":
+            return "This copy of Noty can’t use the microphone. Reinstall Noty and try again."
+        case "destination-bookmark-refresh-failed":
+            return "Noty couldn’t keep access to the recording folder. Choose the folder again."
+        case "recovery.invalid":
+            return "Noty couldn’t read part of the saved audio. "
+                + "Other available audio is listed in Recovered recordings."
+        case "media.invalid-format":
+            return "Noty couldn’t confirm that this recording can be played. Any usable audio is listed below."
+        case "recording.failed":
+            return "Noty couldn’t complete the recording. "
+                + "Check your audio devices and recording folder, then try again."
+        default:
+            if issue.code.hasPrefix("writer.") {
+                return "Noty couldn’t save the recording. Check that the recording folder is available "
+                    + "and your disk has free space, then try again."
+            } else {
+                return issue.message
+            }
         }
-        return RecordingIssue(code: "recording.failed", message: error.localizedDescription, isRetryAllowed: true)
     }
 
     private static func audioIssue(for error: AudioPipelineError) -> RecordingIssue {

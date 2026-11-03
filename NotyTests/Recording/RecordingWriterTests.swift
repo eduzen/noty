@@ -8,9 +8,10 @@ final class RecordingWriterTests: XCTestCase {
         let writer = fixture.makeWriter()
         try await writer.start(at: fixture.folder)
         try await writer.append(chunk(time: 0))
+        fixture.date = fixture.date.addingTimeInterval(3600)
         let artifact = try await writer.finish()
         XCTAssertEqual(artifact.kind, .recording)
-        XCTAssertEqual(artifact.url.lastPathComponent, "Noty-2026-10-23-120000-000.m4a")
+        XCTAssertEqual(artifact.url.lastPathComponent, "fri-23-10-26-12.00.m4a")
         XCTAssertTrue(fixture.fileSystem.exists.contains(artifact.url))
         XCTAssertFalse(fixture.fileSystem.directories.contains { $0.lastPathComponent.hasPrefix(".noty-recovery-") })
         let duplicateFinish = try await writer.finish()
@@ -71,7 +72,9 @@ final class RecordingWriterTests: XCTestCase {
         let outcome = await writer.fail(RecordingIssue(code: "recording.interrupted", message: "Interrupted"))
         guard case let .partial(artifact?, issue) = outcome else { return XCTFail("Expected recovery artifact") }
         XCTAssertEqual(artifact.kind, .recovery)
+        XCTAssertEqual(artifact.url.lastPathComponent, "fri-23-10-26-12.00-recovery-000001.m4a")
         XCTAssertEqual(issue.code, "recording.interrupted")
+        XCTAssertEqual(issue.recoveryURL, artifact.url)
         XCTAssertTrue(fixture.validator.validURLs.contains(artifact.url))
     }
 
@@ -137,8 +140,11 @@ final class RecordingWriterTests: XCTestCase {
         let outcome = await writer.fail(RecordingIssue(code: "recording.interrupted", message: "Interrupted"))
         guard case let .partial(artifact?, _) = outcome else { return XCTFail("Expected active recovery artifact") }
         let discovered = await RecoverySegmentStore.discoverOrphanedArtifacts(
-            in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem
+            in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem,
+            noticeStore: fixture.noticeStore
         )
+        XCTAssertEqual(discovered.count, 1)
+        XCTAssertEqual(discovered.first?.duration, 2)
         XCTAssertTrue(discovered.contains(artifact))
         XCTAssertTrue(discovered.allSatisfy { $0.kind == .recovery })
     }
@@ -156,6 +162,71 @@ final class RecordingWriterTests: XCTestCase {
         XCTAssertEqual(fixture.factory.appendCount, 0)
     }
 
+    func testDismissedCompleteTemporaryRecoveryDoesNotReappearAsSegmentsAfterRelaunch() async throws {
+        let fixture = Fixture()
+        fixture.fileSystem.failMove = true
+        let writer = fixture.makeWriter()
+        try await writer.start(at: fixture.folder)
+        try await writer.append(chunk(time: 0))
+        do {
+            _ = try await writer.finish()
+            XCTFail("Expected final move failure")
+        } catch {}
+        let outcome = await writer.fail(RecordingIssue(code: "recording.failed", message: "Save failed"))
+        guard case let .partial(artifact?, _) = outcome else { return XCTFail("Expected complete temporary audio") }
+        XCTAssertEqual(artifact.kind, .recording)
+        let beforeDismissal = await RecoverySegmentStore.discoverOrphanedArtifacts(
+            in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem,
+            noticeStore: fixture.noticeStore
+        )
+        XCTAssertEqual(beforeDismissal, [artifact])
+        fixture.noticeStore.acknowledge(artifact.recoveryIdentifier)
+        let discovered = await RecoverySegmentStore.discoverOrphanedArtifacts(
+            in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem,
+            noticeStore: fixture.noticeStore
+        )
+        XCTAssertTrue(discovered.isEmpty)
+        XCTAssertTrue(fixture.fileSystem.exists.contains(artifact.url))
+    }
+
+    func testSuccessfulSaveWithFailedCleanupDoesNotReportFalseRecoveryAfterRelaunch() async throws {
+        let fixture = Fixture()
+        fixture.fileSystem.failRemoval = true
+        let writer = fixture.makeWriter()
+        try await writer.start(at: fixture.folder)
+        try await writer.append(chunk(time: 0))
+        let artifact = try await writer.finish()
+        XCTAssertTrue(fixture.fileSystem.exists.contains(artifact.url))
+        XCTAssertFalse(fixture.fileSystem.directories.isEmpty)
+        let discovered = await RecoverySegmentStore.discoverOrphanedArtifacts(
+            in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem,
+            noticeStore: fixture.noticeStore
+        )
+        XCTAssertTrue(discovered.isEmpty)
+    }
+
+    func testDiscoveryKeepsSessionsSeparateAndOrdersAllValidLegacyParts() async {
+        let fixture = Fixture()
+        let first = fixture.folder.appendingPathComponent(".noty-recovery-first", isDirectory: true)
+        let second = fixture.folder.appendingPathComponent(".noty-recovery-second", isDirectory: true)
+        fixture.fileSystem.directories = [first, second]
+        let part1 = first.appendingPathComponent("segment-000001.m4a")
+        let part2 = first.appendingPathComponent("segment-000002.m4a")
+        let invalid = first.appendingPathComponent("segment-000003.m4a")
+        let other = second.appendingPathComponent("segment-000001.m4a")
+        fixture.fileSystem.exists = [part2, other, invalid, part1]
+        fixture.validator.invalidURLs.insert(invalid)
+        let discovered = await RecoverySegmentStore.discoverOrphanedArtifacts(
+            in: fixture.folder, validator: fixture.validator, fileSystem: fixture.fileSystem,
+            noticeStore: fixture.noticeStore
+        )
+        XCTAssertEqual(discovered.count, 2)
+        XCTAssertEqual(discovered[0].fileURLs, [part1, part2])
+        XCTAssertEqual(discovered[0].duration, 2)
+        XCTAssertEqual(discovered[1].fileURLs, [other])
+        XCTAssertEqual(discovered[1].duration, 1)
+    }
+
     private func chunk(time: Double) -> MixedAudioChunk {
         MixedAudioChunk(presentationTime: time, frameCount: 48000, samples: Array(repeating: 0.1, count: 96000))
     }
@@ -166,7 +237,8 @@ private final class Fixture {
     let fileSystem = FakeMediaFileSystem()
     let factory = FakeMediaWriterFactory()
     let validator = FakeMediaValidator()
-    let date = ISO8601DateFormatter().date(from: "2026-10-23T12:00:00Z")!
+    let noticeStore = MemoryRecoveryNoticeStore()
+    var date = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 12))!
     let segmentDuration: TimeInterval
     init(segmentDuration: TimeInterval = 30) {
         self.segmentDuration = segmentDuration
@@ -175,13 +247,15 @@ private final class Fixture {
 
     func makeWriter() -> RecordingWriter {
         RecordingWriter(factory: factory, validator: validator, fileSystem: fileSystem,
-                        recoverySegmentDuration: segmentDuration, now: { self.date })
+                        recoverySegmentDuration: segmentDuration, now: { self.date }, recoveryNoticeStore: noticeStore)
     }
 }
 
 private final class FakeMediaFileSystem: RecordingMediaFileSystem {
     var exists: Set<URL> = []
     var directories: Set<URL> = []
+    var failRemoval = false
+    var failMove = false
     func createDirectory(at url: URL) throws {
         directories.insert(url)
     }
@@ -203,11 +277,17 @@ private final class FakeMediaFileSystem: RecordingMediaFileSystem {
     }
 
     func moveItem(at source: URL, to destination: URL) throws {
+        if failMove {
+            throw CocoaError(.fileWriteNoPermission)
+        }
         guard exists.remove(source) != nil else { throw RecordingIssue(code: "filesystem.missing", message: "missing") }
         exists.insert(destination)
     }
 
     func removeItem(at url: URL) throws {
+        if failRemoval {
+            throw CocoaError(.fileWriteNoPermission)
+        }
         exists = exists.filter { $0 != url && !$0.path.hasPrefix(url.path + "/") }
         directories = directories.filter { $0 != url && !$0.path.hasPrefix(url.path + "/") }
     }
