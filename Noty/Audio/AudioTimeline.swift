@@ -53,6 +53,17 @@ struct AudioTimeline: Sendable {
             origin = packet.presentationTime
             outputOrigin = (outputOrigin ?? origin!) + shift
         }
+        // #region agent log
+        if frame(at: packetEnd) <= cursorFrame, AgentDebugLog.shouldEmit(
+            "timeline.drop.\(packet.source.rawValue)",
+            interval: 1
+        ) {
+            AgentDebugLog.log("AudioTimeline.append", "packet dropped as late", hypothesis: "C,D", [
+                "source": packet.source.rawValue, "lateByFrames": cursorFrame - frame(at: packetEnd),
+                "pts": packet.presentationTime, "latestEnd": latestEnd ?? -1, "frames": packet.frameCount
+            ])
+        }
+        // #endregion
         guard frame(at: packetEnd) > cursorFrame else { return chunks }
 
         let nextBytes = try pendingByteCount(after: packet, endingAt: packetEnd)
@@ -77,6 +88,14 @@ struct AudioTimeline: Sendable {
         }
         pending.sort(by: Self.packetOrder)
         return try render(through: frame(at: finalEnd))
+    }
+
+    /// Renders everything buffered so far without ending the timeline. Used when pausing so the audio
+    /// before the pause is written; later packets continue from the same cursor.
+    mutating func flush() throws -> [MixedAudioChunk] {
+        guard let latestEnd else { return [] }
+        pending.sort(by: Self.packetOrder)
+        return try render(through: frame(at: latestEnd))
     }
 
     private func pendingByteCount(after packet: NormalizedAudioPacket, endingAt packetEnd: TimeInterval) throws -> Int {

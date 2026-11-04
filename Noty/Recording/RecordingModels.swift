@@ -4,6 +4,7 @@ enum RecordingState: String, Equatable, Sendable {
     case idle
     case starting
     case recording
+    case paused
     case stopping
     case interrupted
     case failed

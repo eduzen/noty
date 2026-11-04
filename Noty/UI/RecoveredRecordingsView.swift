@@ -6,28 +6,42 @@ struct RecoveredRecordingsView: View {
     var body: some View {
         if !controller.recoveredRecordings.isEmpty {
             GroupBox("Recovered recordings") {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("These recordings may be incomplete. All available audio files are kept together. "
-                        + "Dismissing a notice keeps the files.")
-                        .font(.callout)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("These recordings may be incomplete. Dismissing a notice keeps the files.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(controller.recoveredRecordings, id: \.recoveryIdentifier) { artifact in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(artifact.displayName)
-                                .font(.headline)
-                            Text("\(artifact.fileCountDescription) · "
-                                + "\(RecordingStatusView.formatDuration(artifact.duration)) available")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            HStack {
-                                Button("Show Audio in Finder") { controller.revealRecordingInFinder(artifact) }
-                                Button("Dismiss Notice") { controller.dismissRecovery(artifact) }
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(artifact.displayName)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text("\(artifact.fileCountDescription) · "
+                                    + "\(RecordingStatusView.formatDuration(artifact.duration)) available")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
+                            Spacer(minLength: 8)
+                            Button {
+                                controller.revealRecordingInFinder(artifact)
+                            } label: {
+                                Image(systemName: "folder")
+                            }
+                            .help("Show Audio in Finder")
+                            .accessibilityLabel("Show audio in Finder")
+                            Button {
+                                controller.dismissRecovery(artifact)
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                            }
+                            .help("Dismiss Notice")
+                            .accessibilityLabel("Dismiss notice")
                         }
+                        .buttonStyle(.borderless)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+                .padding(8)
             }
         }
     }

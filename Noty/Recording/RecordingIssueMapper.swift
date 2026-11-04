@@ -91,8 +91,11 @@ enum RecordingIssueMapper {
                 isRetryAllowed: true
             )
         case .microphoneUnavailable:
-            RecordingIssue(code: "capture.microphone-unavailable", message: "No default microphone is available.",
+            RecordingIssue(code: "capture.microphone-unavailable", message: "No microphone is available.",
                            isRetryAllowed: true)
+        case let .selectedMicrophoneUnavailable(name):
+            RecordingIssue(code: "capture.selected-microphone-unavailable",
+                           message: CaptureServiceError.selectedMicrophoneMessage(name), isRetryAllowed: true)
         case .invalidAudioFormat:
             RecordingIssue(
                 code: "capture.invalid-audio",

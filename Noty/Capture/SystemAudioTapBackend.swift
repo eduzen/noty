@@ -141,6 +141,16 @@ final class SystemAudioTapBackend: AudioCaptureBackend {
                 source: .system,
                 presentationTime: AVAudioTime.seconds(forHostTime: hostTime)
             )
+            // #region agent log
+            if AgentDebugLog.shouldEmit("system.packet") {
+                AgentDebugLog.log("SystemAudioTapBackend.handleInput", "system packet", hypothesis: "C,D", [
+                    "pts": packet.presentationTime,
+                    "lagSec": AVAudioTime.seconds(forHostTime: mach_absolute_time()) - packet.presentationTime,
+                    "frames": packet.frameCount, "sampleRate": packet.sampleRate, "channels": packet.channelCount,
+                    "rms0": AgentDebugLog.rms(packet.samples, channels: packet.channelCount, channel: 0)
+                ])
+            }
+            // #endregion
             handler(packet)
         } catch CaptureServiceError.queueOverflow {
             notify(.queueOverflow(RecordingIssue(

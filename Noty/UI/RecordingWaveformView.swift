@@ -5,7 +5,7 @@ struct RecordingWaveformView: View {
     var level: Double
     var isLive: Bool
 
-    private static let barCount = 52
+    private static let barCount = 96
     private static let idleBar: CGFloat = 0.08
 
     @State private var bars = Array(repeating: idleBar, count: barCount)
@@ -39,8 +39,7 @@ struct RecordingWaveformView: View {
                 bars.append(Self.barHeight(for: level, at: date))
             }
         }
-        .frame(height: 40)
-        .frame(maxWidth: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityHidden(true)
         .onChange(of: isLive) { _, live in
             if !live {

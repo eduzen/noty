@@ -38,7 +38,8 @@ System audio and microphone behavior cannot be fully validated without the corre
 - `RecordingController` is `@MainActor` and owns the recording lifecycle/state machine.
 - `RecordingWriter` is an actor; preserve its serialized file/recovery operations.
 - `CaptureService` exposes bounded async streams. Treat queue overflow and capture termination as recording failures/interruption, not as silently recoverable conditions.
-- System audio has no public permission preflight. Denial shows up as silence, so `SystemAudioSilenceMonitor` warns during recording instead of blocking the start.
+- System audio has no public permission preflight. Denial shows up as silence, so `AudioSilenceMonitor` warns during recording instead of blocking the start. The same monitor warns when the microphone stays silent.
+- The microphone comes from `MicrophonePreference` (chosen in Settings; `nil` follows the macOS default input). A chosen microphone that is disconnected fails the start instead of falling back to another device.
 - Keep the app signed with a stable identity (`just setup-signing` or an Apple Development certificate). Ad-hoc signing changes on every build, so macOS asks for permissions again. Use `just reset-permissions` after changing identities.
 - Keep permission checks and system-framework access behind protocols where practical so they remain testable.
 - Recordings are written to a temporary/recovery location first, validated, then moved to a final `.m4a` path.

@@ -7,6 +7,7 @@ final class MenuBarViewTests: XCTestCase {
             (.idle, "Noty is idle"),
             (.starting, "Noty is starting a recording"),
             (.recording, "Noty is recording, elapsed time 01:05"),
+            (.paused, "Noty is paused, elapsed time 01:05"),
             (.stopping, "Noty is finalizing the recording"),
             (.interrupted, "Noty recording was interrupted"),
             (.failed, "Noty recording failed")

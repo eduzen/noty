@@ -18,6 +18,11 @@ struct AudioMixer: Sendable {
         try timeline.finish().map(limit)
     }
 
+    /// Writes buffered audio without ending the mix, so a later packet continues the same timeline.
+    mutating func flush() throws -> [MixedAudioChunk] {
+        try timeline.flush().map(limit)
+    }
+
     private func limit(_ chunk: MixedAudioChunk) -> MixedAudioChunk {
         let knee = peakLimit * 0.8
         let width = peakLimit - knee

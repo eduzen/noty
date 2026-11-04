@@ -12,7 +12,7 @@ protocol AudioInputEntitlementProviding {
 }
 
 /// Permissions checked before recording. System audio has no public preflight API; its denial is
-/// detected from the tap's output and reported while recording (see `SystemAudioSilenceMonitor`).
+/// detected from the tap's output and reported while recording (see `AudioSilenceMonitor`).
 struct PermissionGrant: Equatable, Sendable {
     let microphone: Bool
 }

@@ -21,9 +21,14 @@ enum CaptureServiceError: Error, Equatable, Sendable {
     case notStarted
     case systemAudioDenied
     case microphoneUnavailable
+    case selectedMicrophoneUnavailable(String)
     case invalidAudioFormat
     case queueOverflow
     case streamFailure(String)
+
+    static func selectedMicrophoneMessage(_ name: String) -> String {
+        "“\(name)” isn’t connected. Connect it, or choose another microphone in Noty Settings, then try again."
+    }
 }
 
 /// System Settings deep links for the permissions capture needs.

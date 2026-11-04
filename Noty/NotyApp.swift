@@ -7,11 +7,18 @@ struct NotyApp: App {
 
     var body: some Scene {
         Window("Noty", id: "main") {
-            MainWindowView(controller: appDelegate.controller, transcriptions: appDelegate.transcriptions,
-                           showMenuBarIcon: $showMenuBarIcon)
-                .frame(minWidth: 480, minHeight: 540)
+            MainWindowView(controller: appDelegate.controller, transcriptions: appDelegate.transcriptions)
+                .frame(minWidth: 620, minHeight: 540)
         }
-        .defaultSize(width: 560, height: 620)
+        .defaultSize(width: 700, height: 620)
+
+        Settings {
+            SettingsView(
+                controller: appDelegate.controller,
+                transcriptions: appDelegate.transcriptions,
+                showMenuBarIcon: $showMenuBarIcon
+            )
+        }
 
         MenuBarExtra(isInserted: $showMenuBarIcon) {
             MenuBarView(controller: appDelegate.controller, transcriptions: appDelegate.transcriptions)

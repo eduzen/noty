@@ -1,120 +1,82 @@
-import AppKit
 import SwiftUI
 
 struct MainWindowView: View {
     @ObservedObject var controller: RecordingController
     @ObservedObject var transcriptions: TranscriptionController
-    @Binding var showMenuBarIcon: Bool
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                header
-                recordingControls
-                if let issue = controller.latestIssue {
-                    issueView(issue)
-                }
-                RecoveredRecordingsView(controller: controller)
-                settings
-                lastRecording
-                TranscriptionView(controller: transcriptions)
+        VStack(alignment: .leading, spacing: 16) {
+            recordingControls
+            if let issue = controller.latestIssue {
+                issueView(issue)
             }
-            .padding(28)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            RecoveredRecordingsView(controller: controller)
+            TranscriptionView(controller: transcriptions)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background)
-    }
-
-    private var header: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "waveform.circle.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Noty")
-                    .font(.largeTitle.bold())
-                Text("Record system audio and your microphone.")
-                    .foregroundStyle(.secondary)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Settings", systemImage: "gearshape") { openSettings() }
+                    .help("Settings (⌘,)")
             }
         }
     }
 
     private var recordingControls: some View {
         GroupBox {
-            VStack(spacing: 18) {
+            HStack(spacing: 14) {
                 RecordingStatusView(state: controller.state, elapsedDuration: controller.elapsedDuration)
+                Text(RecordingStatusView.formatDuration(controller.elapsedDuration))
+                    .font(.title2.monospacedDigit())
+                    .contentTransition(.numericText())
+                Spacer(minLength: 12)
+                controlButtons
+            }
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .padding(12)
+            .background {
+                // Size the waveform from the full padded box, independently of the controls.
                 if controller.hasActiveRecording {
                     RecordingWaveformView(
                         level: controller.audioLevel,
-                        isLive: controller.state != .stopping
+                        isLive: controller.state == .recording
                     )
+                    .padding(6)
+                    .opacity(0.35)
+                    .allowsHitTesting(false)
                 }
-                Text(RecordingStatusView.formatDuration(controller.elapsedDuration))
-                    .font(.system(size: 44, weight: .medium, design: .monospaced))
-                    .contentTransition(.numericText())
-                HStack(spacing: 12) {
-                    Button("Start Recording", systemImage: "record.circle") {
-                        Task { await controller.start() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!controller.canStart)
-
-                    Button("Stop", systemImage: "stop.fill") {
-                        Task { await controller.stop() }
-                    }
-                    .disabled(!controller.canStop)
-                }
-                .controlSize(.large)
             }
-            .frame(maxWidth: .infinity)
-            .padding(16)
         }
     }
 
-    private var settings: some View {
-        GroupBox("Settings") {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Recording folder", systemImage: "folder")
-                        .font(.headline)
-                    Text(controller.destinationDisplayPath)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Choose Folder…") { controller.chooseDestination() }
-                        .disabled(!controller.canChooseDestination)
+    private var controlButtons: some View {
+        HStack(spacing: 8) {
+            if controller.hasActiveRecording {
+                if controller.state == .paused {
+                    Button("Resume", systemImage: "play.fill") { controller.resume() }
+                        .disabled(!controller.canResume)
+                } else {
+                    Button("Pause", systemImage: "pause.fill") { controller.pause() }
+                        .disabled(!controller.canPause)
                 }
-                Divider()
-                Toggle("Show Noty in the menu bar", isOn: $showMenuBarIcon)
-                Text("You can always reopen this window from the Dock. Closing it keeps Noty running.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    @ViewBuilder
-    private var lastRecording: some View {
-        if let artifact = controller.lastArtifact {
-            GroupBox("Last recording") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(artifact.displayName)
-                            .lineLimit(2)
-                        Text("Show the saved file in Finder.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Show in Finder") { controller.revealLastRecordingInFinder() }
+                Button("Stop", systemImage: "stop.fill") {
+                    Task { await controller.stop() }
                 }
-                .padding(12)
+                .disabled(!controller.canStop)
+            } else {
+                Button("Record", systemImage: "record.circle.fill") {
+                    Task { await controller.start() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(!controller.canStart)
             }
         }
+        .controlSize(.large)
     }
 
     private func issueView(_ issue: RecordingIssue) -> some View {

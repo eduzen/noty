@@ -73,6 +73,56 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
         XCTAssertLessThanOrEqual(peak(samples), 0.92)
     }
 
+    func testPausedSpanIsOmittedFromWrittenFileDuration() async throws {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Noty-pause-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: destinationURL) }
+
+        let capture = FakeCaptureService()
+        let clock = PauseTestClock()
+        let controller = RecordingController(
+            permissions: IntegrationPermissions(),
+            destinations: IntegrationDestinations(url: destinationURL),
+            captureFactory: { capture },
+            writerFactory: { RecordingWriter() },
+            recoveryDiscovery: { _ in [] },
+            clock: clock.read
+        )
+
+        clock.now = 0
+        await controller.start()
+        for second in 0 ..< 3 {
+            capture.emit(packet(source: .system, time: Double(second), frames: 48000, frequency: 440, amplitude: 0.5))
+            try await Task.sleep(nanoseconds: 60_000_000)
+        }
+
+        // Two seconds of audio captured while paused: it must not appear in the file.
+        clock.now = 3
+        controller.pause()
+        for second in 3 ..< 5 {
+            capture.emit(packet(source: .system, time: Double(second), frames: 48000, frequency: 440, amplitude: 0.5))
+            try await Task.sleep(nanoseconds: 60_000_000)
+        }
+
+        clock.now = 5
+        controller.resume()
+        for second in 5 ..< 8 {
+            capture.emit(packet(source: .system, time: Double(second), frames: 48000, frequency: 440, amplitude: 0.5))
+            try await Task.sleep(nanoseconds: 60_000_000)
+        }
+
+        clock.now = 8
+        await controller.stop()
+
+        let artifact = try XCTUnwrap(controller.lastArtifact)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(artifact.duration, 6, accuracy: 0.1)
+        let validatedDuration = try await MediaValidator().validate(url: artifact.url)
+        XCTAssertEqual(validatedDuration, 6, accuracy: 0.1)
+        XCTAssertEqual(controller.elapsedDuration, 6, accuracy: 0.001)
+    }
+
     private func packet(source: AudioSource, time: Double, frames: Int, frequency: Double,
                         amplitude: Double, sampleRate: Double = AudioFormat.sampleRate) -> CapturedAudioPacket {
         var samples: [Float] = []
@@ -112,6 +162,15 @@ final class RecordingPipelineIntegrationTests: XCTestCase {
 
     private func peak(_ samples: UnsafeBufferPointer<Float>) -> Double {
         samples.reduce(0.0) { max($0, abs(Double($1))) }
+    }
+}
+
+/// Manually advanced clock so pause boundaries are exact.
+private final class PauseTestClock {
+    var now: TimeInterval = 0
+
+    func read() -> TimeInterval {
+        now
     }
 }
 

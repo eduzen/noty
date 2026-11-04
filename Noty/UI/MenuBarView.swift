@@ -5,6 +5,7 @@ struct MenuBarView: View {
     @ObservedObject var controller: RecordingController
     @ObservedObject var transcriptions: TranscriptionController
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         if showsWarning {
@@ -27,6 +28,22 @@ struct MenuBarView: View {
             Label("Start Recording", systemImage: "record.circle")
         }
         .disabled(!controller.canStart)
+
+        if controller.state == .paused {
+            Button {
+                controller.resume()
+            } label: {
+                Label("Resume Recording", systemImage: "play.circle")
+            }
+            .disabled(!controller.canResume)
+        } else {
+            Button {
+                controller.pause()
+            } label: {
+                Label("Pause Recording", systemImage: "pause.circle")
+            }
+            .disabled(!controller.canPause)
+        }
 
         Button {
             Task { await controller.stop() }
@@ -101,6 +118,10 @@ struct MenuBarView: View {
         }
 
         Divider()
+        Button("Settings…") {
+            openSettings()
+            NSApp.activate(ignoringOtherApps: true)
+        }
         Button("Quit Noty") { NSApp.terminate(nil) }
     }
 
@@ -136,6 +157,7 @@ struct MenuBarView: View {
         case .idle: "Ready to record"
         case .starting: "Starting recording…"
         case .recording: "Recording · \(RecordingStatusView.formatDuration(controller.elapsedDuration))"
+        case .paused: "Paused · \(RecordingStatusView.formatDuration(controller.elapsedDuration))"
         case .stopping: "Finishing recording…"
         case .interrupted: "Recording interrupted"
         case .failed: "Recording failed"
@@ -146,6 +168,8 @@ struct MenuBarView: View {
         switch issue.code {
         case "recording.recovery-found": "Partial recording available"
         case "capture.system-audio-silent": "No system audio detected"
+        case "capture.microphone-silent": "No microphone audio detected"
+        case "capture.selected-microphone-unavailable": "Microphone not connected"
         default: "Recording needs attention"
         }
     }

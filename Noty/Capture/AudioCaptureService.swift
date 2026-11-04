@@ -175,7 +175,13 @@ final class AudioCaptureService: CaptureService {
             case .microphoneUnavailable:
                 return .microphoneDisconnected(RecordingIssue(
                     code: "capture.microphone-unavailable",
-                    message: "No default microphone is available.",
+                    message: "No microphone is available.",
+                    isRetryAllowed: true
+                ))
+            case let .selectedMicrophoneUnavailable(name):
+                return .microphoneDisconnected(RecordingIssue(
+                    code: "capture.selected-microphone-unavailable",
+                    message: CaptureServiceError.selectedMicrophoneMessage(name),
                     isRetryAllowed: true
                 ))
             case let .streamFailure(message):

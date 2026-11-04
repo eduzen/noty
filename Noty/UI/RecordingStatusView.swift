@@ -22,13 +22,27 @@ struct RecordingStatusView: View {
             Image(systemName: symbolName)
                 .foregroundStyle(tint)
             if compact {
-                Text(state == .recording ? "Noty \(Self.formatDuration(elapsedDuration))" : "Noty")
+                Text(state == .recording || state == .paused ? "Noty \(Self.formatDuration(elapsedDuration))" : "Noty")
             } else {
-                Text(Self.accessibleLabel(for: state, elapsedDuration: elapsedDuration))
+                Text(Self.visibleTitle(for: state))
+                    .font(.headline)
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Self.accessibleLabel(for: state, elapsedDuration: elapsedDuration))
+    }
+
+    /// Short, visible status for the main window.
+    static func visibleTitle(for state: RecordingState) -> String {
+        switch state {
+        case .idle: "Ready"
+        case .starting: "Starting…"
+        case .recording: "Recording"
+        case .paused: "Paused"
+        case .stopping: "Finishing…"
+        case .interrupted: "Interrupted"
+        case .failed: "Failed"
+        }
     }
 
     static func accessibleLabel(for state: RecordingState, elapsedDuration: TimeInterval) -> String {
@@ -36,6 +50,7 @@ struct RecordingStatusView: View {
         case .idle: "Noty is idle"
         case .starting: "Noty is starting a recording"
         case .recording: "Noty is recording, elapsed time \(formatDuration(elapsedDuration))"
+        case .paused: "Noty is paused, elapsed time \(formatDuration(elapsedDuration))"
         case .stopping: "Noty is finalizing the recording"
         case .interrupted: "Noty recording was interrupted"
         case .failed: "Noty recording failed"
@@ -57,6 +72,7 @@ struct RecordingStatusView: View {
         case .idle: "waveform"
         case .starting: "hourglass"
         case .recording: "record.circle.fill"
+        case .paused: "pause.circle.fill"
         case .stopping: "stop.circle"
         case .interrupted: "exclamationmark.triangle.fill"
         case .failed: "xmark.circle.fill"
@@ -66,6 +82,7 @@ struct RecordingStatusView: View {
     private var tint: Color {
         switch state {
         case .recording: .red
+        case .paused: .secondary
         case .interrupted, .failed: .orange
         default: .primary
         }

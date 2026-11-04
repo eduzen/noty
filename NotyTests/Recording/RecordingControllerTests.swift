@@ -279,6 +279,30 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertNil(controller.latestIssue)
     }
 
+    func testSilentMicrophoneWarnsWithoutStoppingRecording() async throws {
+        let capture = FakeCaptureService()
+        let writer = FakeRecordingWriter()
+        let controller = makeController(capture: capture, writer: writer)
+        await controller.start()
+
+        for second in 0 ..< 8 {
+            let time = TimeInterval(second)
+            capture.emit(packet(source: .system, time: time, frames: 48000, left: 0.2, right: 0.1))
+            try await Task.sleep(nanoseconds: 150_000_000)
+            capture.emit(packet(source: .microphone, time: time, frames: 48000, left: 0, right: 0))
+            try await Task.sleep(nanoseconds: 150_000_000)
+        }
+        let warned = await waitUntil { controller.latestIssue?.code == "capture.microphone-silent" }
+
+        XCTAssertTrue(warned)
+        XCTAssertEqual(controller.state, .recording)
+        capture.emit(packet(source: .microphone, time: 8, frames: 48000, left: 0.3, right: 0.2))
+        let cleared = await waitUntil { controller.latestIssue == nil }
+        XCTAssertTrue(cleared)
+        await controller.stop()
+        XCTAssertEqual(controller.state, .idle)
+    }
+
     func testBootstrapRecoveryDuringRecordingKeepsStopAndFinalizationAvailable() async {
         let discoveryGate = AsyncControllerGate()
         let destinations = FakeDestinations()
@@ -661,6 +685,115 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(scheduling.events, ["suspend", "resume"])
     }
 
+    func testPauseLeavesPausedAudioOutOfFileAndResumeContinuesWithoutGap() async throws {
+        let capture = FakeCaptureService()
+        let writer = FakeRecordingWriter()
+        let clock = TestClock()
+        let controller = makeController(capture: capture, writer: writer, clock: clock.read)
+
+        clock.now = 0
+        await controller.start()
+        capture.emit(packet(source: .system, time: 0, frames: 48000, left: 0.5, right: 0.5))
+        try await settle()
+
+        clock.now = 1
+        controller.pause()
+        XCTAssertEqual(controller.state, .paused)
+        XCTAssertTrue(controller.canResume)
+        XCTAssertFalse(controller.canPause)
+        XCTAssertTrue(controller.canStop)
+        XCTAssertTrue(controller.hasActiveRecording)
+        XCTAssertEqual(controller.elapsedDuration, 1, accuracy: 0.001)
+
+        // Loud audio captured during the pause must not reach the file.
+        capture.emit(packet(source: .system, time: 1, frames: 48000, left: 0.9, right: 0.9))
+        try await settle()
+        capture.emit(packet(source: .system, time: 2, frames: 48000, left: 0.9, right: 0.9))
+        try await settle()
+
+        clock.now = 3
+        controller.resume()
+        XCTAssertEqual(controller.state, .recording)
+        XCTAssertEqual(controller.elapsedDuration, 1, accuracy: 0.001)
+
+        // Audio after the pause is written right after the first second, so the file has no gap.
+        capture.emit(packet(source: .system, time: 3, frames: 48000, left: 0.2, right: 0.2))
+        try await settle()
+        capture.emit(packet(source: .system, time: 4, frames: 48000, left: 0.2, right: 0.2))
+        try await settle()
+
+        clock.now = 5
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        let left = leftChannel(snapshot.chunks)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(left.count, 144_000)
+        XCTAssertEqual(controller.lastArtifact?.duration ?? 0, 3, accuracy: 1.0 / 48000)
+        XCTAssertEqual(controller.elapsedDuration, 3, accuracy: 0.001)
+        XCTAssertEqual(left[24000], 0.25, accuracy: 0.01)
+        XCTAssertEqual(left[60000], 0.1, accuracy: 0.01)
+        XCTAssertEqual(left[120_000], 0.1, accuracy: 0.01)
+        XCTAssertFalse(left.contains { abs($0) > 0.3 && $0 > 0.4 }, "Paused audio leaked into the file")
+    }
+
+    func testStopWhilePausedFinalizesWithoutCountingThePause() async throws {
+        let capture = FakeCaptureService()
+        let writer = FakeRecordingWriter()
+        let clock = TestClock()
+        let controller = makeController(capture: capture, writer: writer, clock: clock.read)
+
+        clock.now = 0
+        await controller.start()
+        capture.emit(packet(source: .system, time: 0, frames: 48000, left: 0.5, right: 0.5))
+        try await settle()
+
+        clock.now = 1
+        controller.pause()
+        capture.emit(packet(source: .system, time: 1, frames: 48000, left: 0.9, right: 0.9))
+        try await settle()
+
+        clock.now = 10
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(snapshot.finishCount, 1)
+        XCTAssertEqual(snapshot.chunks.reduce(0) { $0 + $1.frameCount }, 48000)
+        XCTAssertEqual(controller.elapsedDuration, 1, accuracy: 0.001)
+    }
+
+    func testPauseAndResumeAreIgnoredOutsideTheirStates() async {
+        let clock = TestClock()
+        let controller = makeController(clock: clock.read)
+
+        controller.pause()
+        controller.resume()
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertFalse(controller.canPause)
+        XCTAssertFalse(controller.canResume)
+
+        clock.now = 0
+        await controller.start()
+        controller.resume()
+        XCTAssertEqual(controller.state, .recording)
+
+        clock.now = 1
+        controller.pause()
+        controller.pause()
+        XCTAssertEqual(controller.state, .paused)
+        await controller.stop()
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    private func settle() async throws {
+        try await Task.sleep(nanoseconds: 120_000_000)
+    }
+
+    private func leftChannel(_ chunks: [MixedAudioChunk]) -> [Float] {
+        chunks.flatMap { chunk in stride(from: 0, to: chunk.samples.count, by: 2).map { chunk.samples[$0] } }
+    }
+
     private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -679,7 +812,8 @@ final class RecordingControllerTests: XCTestCase {
         writer: FakeRecordingWriter? = nil,
         recoveryDiscovery: @escaping RecordingController.RecoveryDiscovery = { _ in [] },
         recoveryNoticeStore: any RecoveryNoticeStoring = MemoryRecoveryNoticeStore(),
-        transcriptions: (any RecordingTranscriptionScheduling)? = nil
+        transcriptions: (any RecordingTranscriptionScheduling)? = nil,
+        clock: @escaping () -> TimeInterval = RecordingClock.now
     ) -> RecordingController {
         let resolvedPermissions = permissions ?? FakePermissions()
         let resolvedDestinations = destinations ?? FakeDestinations()
@@ -692,7 +826,8 @@ final class RecordingControllerTests: XCTestCase {
             writerFactory: { resolvedWriter },
             recoveryDiscovery: recoveryDiscovery,
             recoveryNoticeStore: recoveryNoticeStore,
-            transcriptions: transcriptions
+            transcriptions: transcriptions,
+            clock: clock
         )
     }
 
@@ -706,6 +841,15 @@ final class RecordingControllerTests: XCTestCase {
             frameCount: frames,
             samples: Array(repeating: [left, right], count: frames).flatMap { $0 }
         )
+    }
+}
+
+/// Manually advanced clock so pause boundaries and elapsed time are exact in tests.
+private final class TestClock {
+    var now: TimeInterval = 0
+
+    func read() -> TimeInterval {
+        now
     }
 }
 

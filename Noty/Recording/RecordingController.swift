@@ -66,8 +66,12 @@ final class RecordingController: ObservableObject {
     private var finalizationTask: Task<RecordingOutcome, Never>?
     private var lastOutcome: RecordingOutcome?
     private var pendingFailure: (issue: RecordingIssue, state: RecordingState)?
-    private var recordingStartUptime: TimeInterval?
-    private var systemAudioHasBeenHeard = false
+    private var recordingStartTime: TimeInterval?
+    private var pausedDuration: TimeInterval = 0
+    private var pauseStartedAt: TimeInterval?
+    private var pauseGate: RecordingPauseGate?
+    private let clock: () -> TimeInterval
+    private var heardSources: Set<AudioSource> = []
     private var startedRecoverySessions: Set<String> = []
     private var stopRequested = false
     private var didBootstrap = false
@@ -87,7 +91,8 @@ final class RecordingController: ObservableObject {
             )
         },
         recoveryNoticeStore: any RecoveryNoticeStoring = RecoveryNoticeStore(),
-        transcriptions: (any RecordingTranscriptionScheduling)? = nil
+        transcriptions: (any RecordingTranscriptionScheduling)? = nil,
+        clock: @escaping () -> TimeInterval = RecordingClock.now
     ) {
         self.permissions = permissions
         self.destinations = destinations
@@ -96,14 +101,23 @@ final class RecordingController: ObservableObject {
         self.recoveryDiscovery = recoveryDiscovery
         self.recoveryNoticeStore = recoveryNoticeStore
         self.transcriptions = transcriptions
+        self.clock = clock
     }
 
     var canStart: Bool {
         state == .idle || state == .interrupted || state == .failed
     }
 
-    var canStop: Bool {
+    var canPause: Bool {
         state == .recording
+    }
+
+    var canResume: Bool {
+        state == .paused
+    }
+
+    var canStop: Bool {
+        state == .recording || state == .paused
     }
 
     var canChooseDestination: Bool {
@@ -111,7 +125,7 @@ final class RecordingController: ObservableObject {
     }
 
     var hasActiveRecording: Bool {
-        state == .starting || state == .recording || state == .stopping
+        state == .starting || state == .recording || state == .paused || state == .stopping
     }
 
     var destinationDisplayPath: String {
@@ -159,8 +173,10 @@ final class RecordingController: ObservableObject {
         finalizationTask = nil
         lastOutcome = nil
         latestIssue = nil
-        systemAudioHasBeenHeard = false
+        heardSources = []
         elapsedDuration = 0
+        pausedDuration = 0
+        pauseStartedAt = nil
         state = .starting
         startAudioLevelPublishing()
         let task = Task { @MainActor [weak self] in
@@ -177,15 +193,35 @@ final class RecordingController: ObservableObject {
             stopRequested = true
             await startTask?.value
         }
-        if state == .recording {
+        if canStop {
             _ = await requestFinalization(issue: nil, terminalState: nil)
         } else if state == .stopping, let finalizationTask {
             _ = await finalizationTask.value
         }
     }
 
+    /// Stops writing audio. Capture keeps running so resuming needs no new permission prompt or tap.
+    func pause() {
+        guard canPause, let pauseGate else { return }
+        let now = clock()
+        pauseGate.pause(at: now)
+        pauseStartedAt = now
+        state = .paused
+        refreshElapsedDuration()
+    }
+
+    func resume() {
+        guard canResume, let pauseGate, let pauseStartedAt else { return }
+        let now = clock()
+        pauseGate.resume(at: now)
+        pausedDuration += max(0, now - pauseStartedAt)
+        self.pauseStartedAt = nil
+        state = .recording
+        refreshElapsedDuration()
+    }
+
     func finishForTermination() async -> Bool {
-        if state == .starting || state == .recording {
+        if state == .starting || state == .recording || state == .paused {
             await stop()
         }
         if state == .stopping, let finalizationTask {
@@ -290,7 +326,7 @@ extension RecordingController {
             }
             guard !stopRequested else { await cancelStartup(); return }
             state = .recording
-            recordingStartUptime = ProcessInfo.processInfo.systemUptime
+            recordingStartTime = clock()
             startElapsedTimer()
         } catch {
             if stopRequested {
@@ -325,7 +361,8 @@ extension RecordingController {
         captureTask = nil
         terminationTask?.cancel()
         terminationTask = nil
-        recordingStartUptime = nil
+        recordingStartTime = nil
+        resetPauseTracking()
         elapsedDuration = 0
         lastOutcome = nil
         pendingFailure = nil
@@ -363,9 +400,13 @@ extension RecordingController {
         let packets = capture.packets
         // UI work must not stall the bounded audio stream.
         let revision = lifecycleRevision
+        let gate = RecordingPauseGate()
+        pauseGate = gate
         captureTask = Task.detached(priority: .userInitiated) { [weak self, meter = audioMeter] in
             guard let self else { return AudioMixer() }
-            return await self.consumePackets(from: packets, writer: writer, revision: revision, meter: meter)
+            return await self.consumePackets(
+                from: packets, writer: writer, revision: revision, meter: meter, pauseGate: gate
+            )
         }
         terminationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -377,25 +418,31 @@ extension RecordingController {
         from packets: AsyncThrowingStream<CapturedAudioPacket, Error>,
         writer: any RecordingWriting,
         revision: UInt64,
-        meter: RecordingAudioMeter
+        meter: RecordingAudioMeter,
+        pauseGate: RecordingPauseGate
     ) async -> AudioMixer {
         var mixer = AudioMixer()
         let normalizer = AudioNormalizer()
-        var silenceMonitor = SystemAudioSilenceMonitor()
+        var systemSilence = AudioSilenceMonitor(source: .system)
+        var microphoneSilence = AudioSilenceMonitor(source: .microphone)
+        var isPaused = false
         var failure: Error?
         do {
             for try await packet in packets {
-                let hadAudio = silenceMonitor.heardAudio
-                if silenceMonitor.observe(packet) {
-                    Task { await self.updateSystemAudioStatus(isAudible: false, revision: revision) }
-                } else if !hadAudio, silenceMonitor.heardAudio {
-                    Task { await self.updateSystemAudioStatus(isAudible: true, revision: revision) }
+                // Paused audio is not silence; the monitors only see audio that is written, on the written timeline.
+                if case let .keep(shift) = pauseGate.disposition(for: packet.presentationTime) {
+                    let timed = shift > 0 ? packet.shifted(by: shift) : packet
+                    observeSilence(timed, with: &systemSilence, revision: revision)
+                    observeSilence(timed, with: &microphoneSilence, revision: revision)
                 }
+                // Normalize every packet, paused or not, so the converter's state stays continuous.
                 try await appendNormalizedPackets(
                     normalizer.normalize(packet),
                     to: &mixer,
                     writer: writer,
-                    meter: meter
+                    meter: meter,
+                    pauseGate: pauseGate,
+                    isPaused: &isPaused
                 )
             }
         } catch {
@@ -405,7 +452,14 @@ extension RecordingController {
         let canDrain = failure.map { RecordingIssueMapper.issue(from: $0).code.hasPrefix("capture.") } ?? true
         if !Task.isCancelled, canDrain {
             do {
-                try await appendNormalizedPackets(normalizer.finish(), to: &mixer, writer: writer, meter: meter)
+                try await appendNormalizedPackets(
+                    normalizer.finish(),
+                    to: &mixer,
+                    writer: writer,
+                    meter: meter,
+                    pauseGate: pauseGate,
+                    isPaused: &isPaused
+                )
             } catch {
                 failure = error
             }
@@ -418,45 +472,116 @@ extension RecordingController {
         _ packets: [NormalizedAudioPacket],
         to mixer: inout AudioMixer,
         writer: any RecordingWriting,
-        meter: RecordingAudioMeter
+        meter: RecordingAudioMeter,
+        pauseGate: RecordingPauseGate,
+        isPaused: inout Bool
     ) async throws {
         for packet in packets {
-            for chunk in try mixer.append(packet) {
-                meter.observe(samples: chunk.samples)
-                try await writer.append(chunk)
+            switch pauseGate.disposition(for: packet.presentationTime) {
+            case .drop:
+                guard !isPaused else { continue }
+                isPaused = true
+                // Write what is buffered so the audio just before the pause is on disk, not held for resume.
+                let chunks = try mixer.flush()
+                try await appendChunks(chunks, writer: writer, meter: meter)
+            case let .keep(shift):
+                isPaused = false
+                let timed = shift > 0 ? packet.shifted(by: shift) : packet
+                // #region agent log
+                if AgentDebugLog.shouldEmit("controller.normalized.\(packet.source.rawValue)") {
+                    AgentDebugLog.log(
+                        "RecordingController.appendNormalizedPackets",
+                        "normalized packet to mixer",
+                        hypothesis: "B,C",
+                        [
+                            "source": packet.source.rawValue, "pts": timed.presentationTime, "shift": shift,
+                            "frames": packet.frameCount, "rmsL": AgentDebugLog.rms(
+                                packet.samples,
+                                channels: 2,
+                                channel: 0
+                            ),
+                            "rmsR": AgentDebugLog.rms(packet.samples, channels: 2, channel: 1)
+                        ]
+                    )
+                }
+                // #endregion
+                let chunks = try mixer.append(timed)
+                try await appendChunks(chunks, writer: writer, meter: meter)
             }
         }
     }
 
+    private nonisolated func appendChunks(
+        _ chunks: [MixedAudioChunk],
+        writer: any RecordingWriting,
+        meter: RecordingAudioMeter
+    ) async throws {
+        for chunk in chunks {
+            meter.observe(samples: chunk.samples)
+            try await writer.append(chunk)
+        }
+    }
+
+    private nonisolated func observeSilence(
+        _ packet: CapturedAudioPacket,
+        with monitor: inout AudioSilenceMonitor,
+        revision: UInt64
+    ) {
+        let source = monitor.source
+        let hadAudio = monitor.heardAudio
+        if monitor.observe(packet) {
+            Task { await self.updateSilenceStatus(source: source, isAudible: false, revision: revision) }
+        } else if !hadAudio, monitor.heardAudio {
+            Task { await self.updateSilenceStatus(source: source, isAudible: true, revision: revision) }
+        }
+    }
+
     /// UI notices must never hold up the bounded audio stream.
-    private func updateSystemAudioStatus(isAudible: Bool, revision: UInt64) {
+    private func updateSilenceStatus(source: AudioSource, isAudible: Bool, revision: UInt64) {
         guard lifecycleRevision == revision else { return }
+        let warning = Self.silenceWarning(for: source)
         if isAudible {
-            systemAudioHasBeenHeard = true
-            if latestIssue?.code == "capture.system-audio-silent" {
+            heardSources.insert(source)
+            if latestIssue?.code == warning.code {
                 latestIssue = nil
             }
             return
         }
-        guard state == .recording, !systemAudioHasBeenHeard, latestIssue == nil else { return }
-        latestIssue = RecordingIssue(
-            code: "capture.system-audio-silent",
-            message: """
-            No system audio has been detected yet. If something is playing, allow Noty in System Settings → \
-            Privacy & Security → System Audio Recording Only. Microphone recording is continuing.
-            """,
-            recoveryURL: CaptureSettingsLinks.systemAudio,
-            isRetryAllowed: true
-        )
+        guard state == .recording, !heardSources.contains(source), latestIssue == nil else { return }
+        latestIssue = warning
+    }
+
+    private static func silenceWarning(for source: AudioSource) -> RecordingIssue {
+        switch source {
+        case .system:
+            RecordingIssue(
+                code: "capture.system-audio-silent",
+                message: """
+                No system audio has been detected yet. If something is playing, allow Noty in System Settings → \
+                Privacy & Security → System Audio Recording Only. Microphone recording is continuing.
+                """,
+                recoveryURL: CaptureSettingsLinks.systemAudio,
+                isRetryAllowed: true
+            )
+        case .microphone:
+            RecordingIssue(
+                code: "capture.microphone-silent",
+                message: """
+                No sound has been detected from the microphone yet. Check that the microphone chosen in Noty \
+                Settings is the one you are using and that it isn’t muted. System audio recording is continuing.
+                """,
+                isRetryAllowed: true
+            )
+        }
     }
 
     private func captureEnded(error: Error? = nil) {
         guard !Task.isCancelled else { return }
         if let error {
-            guard state == .starting || state == .recording || state == .stopping else { return }
+            guard isCapturing || state == .stopping else { return }
             let issue = issue(from: error)
             scheduleFinalization(issue: issue, terminalState: terminalState(for: issue))
-        } else if state == .starting || state == .recording {
+        } else if isCapturing {
             scheduleFinalization(
                 issue: RecordingIssue(
                     code: "capture.ended",
@@ -473,7 +598,7 @@ extension RecordingController {
             let issue: RecordingIssue
             switch termination {
             case .userStopped:
-                guard state == .recording else { continue }
+                guard state == .recording || state == .paused else { continue }
                 issue = RecordingIssue(
                     code: "capture.ended",
                     message: "Audio capture stopped unexpectedly.",
@@ -484,7 +609,7 @@ extension RecordingController {
                  let .queueOverflow(value):
                 issue = self.issue(from: value)
             }
-            guard state == .starting || state == .recording || state == .stopping else { return }
+            guard isCapturing || state == .stopping else { return }
             scheduleFinalization(issue: issue, terminalState: terminalState(for: issue))
             return
         }
@@ -519,9 +644,7 @@ extension RecordingController {
         state = .stopping
         timerTask?.cancel()
         stopAudioLevelPublishing()
-        if let recordingStartUptime {
-            elapsedDuration = max(0, ProcessInfo.processInfo.systemUptime - recordingStartUptime)
-        }
+        refreshElapsedDuration()
         let task = Task<RecordingOutcome, Never> { @MainActor [weak self] in
             guard let self else {
                 return RecordingOutcome.failed(RecordingIssue(
@@ -614,10 +737,29 @@ extension RecordingController {
         capture = nil
         writer = nil
         captureTask = nil
-        recordingStartUptime = nil
+        recordingStartTime = nil
+        resetPauseTracking()
         mixer = AudioMixer()
         stopAudioLevelPublishing()
         transcriptions?.resumeAfterRecording()
+    }
+
+    private var isCapturing: Bool {
+        state == .starting || state == .recording || state == .paused
+    }
+
+    /// Active recording time: wall time since start, minus every completed pause and any pause in progress.
+    private func refreshElapsedDuration() {
+        guard let recordingStartTime else { return }
+        let now = clock()
+        let currentPause = pauseStartedAt.map { max(0, now - $0) } ?? 0
+        elapsedDuration = max(0, now - recordingStartTime - pausedDuration - currentPause)
+    }
+
+    private func resetPauseTracking() {
+        pausedDuration = 0
+        pauseStartedAt = nil
+        pauseGate = nil
     }
 
     private func startElapsedTimer() {
@@ -625,8 +767,8 @@ extension RecordingController {
         timerTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
-                guard let self, let start = self.recordingStartUptime else { return }
-                self.elapsedDuration = max(0, ProcessInfo.processInfo.systemUptime - start)
+                guard let self, self.recordingStartTime != nil else { return }
+                self.refreshElapsedDuration()
             }
         }
     }
@@ -638,7 +780,7 @@ extension RecordingController {
         levelPublishTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 50_000_000) } catch { return }
-                guard let self, self.state == .starting || self.state == .recording else { return }
+                guard let self, self.isCapturing else { return }
                 self.audioLevel = Double(self.audioMeter.sampleAndDecay())
             }
         }

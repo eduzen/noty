@@ -17,6 +17,14 @@ final class AudioNormalizer {
             if previous.isContiguous(with: packet) {
                 return try previous.append(packet)
             }
+            // #region agent log
+            if AgentDebugLog.shouldEmit("normalizer.restart.\(packet.source.rawValue)", interval: 1) {
+                AgentDebugLog.log("AudioNormalizer.normalize", "segment restart", hypothesis: "E", [
+                    "source": packet.source.rawValue, "pts": packet.presentationTime,
+                    "sampleRate": packet.sampleRate, "discontinuity": packet.isDiscontinuity
+                ])
+            }
+            // #endregion
             result = try previous.finish()
             segments.removeValue(forKey: packet.source)
         }

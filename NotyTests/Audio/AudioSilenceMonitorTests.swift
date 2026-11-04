@@ -2,9 +2,9 @@ import Foundation
 @testable import Noty
 import XCTest
 
-final class SystemAudioSilenceMonitorTests: XCTestCase {
+final class AudioSilenceMonitorTests: XCTestCase {
     func testReportsOnceAfterThresholdOfSilentSystemAudio() {
-        var monitor = SystemAudioSilenceMonitor()
+        var monitor = AudioSilenceMonitor(source: .system)
 
         XCTAssertFalse(monitor.observe(packet(.system, time: 0, seconds: 2, value: 0)))
         XCTAssertFalse(monitor.observe(packet(.system, time: 2, seconds: 2, value: 0)))
@@ -13,22 +13,30 @@ final class SystemAudioSilenceMonitorTests: XCTestCase {
     }
 
     func testAudibleSystemAudioNeverReports() {
-        var monitor = SystemAudioSilenceMonitor()
+        var monitor = AudioSilenceMonitor(source: .system)
 
         XCTAssertFalse(monitor.observe(packet(.system, time: 0, seconds: 1, value: 0.5)))
         XCTAssertFalse(monitor.observe(packet(.system, time: 1, seconds: 10, value: 0)))
     }
 
     func testMicrophoneSilenceDoesNotCountAsMissingSystemAudio() {
-        var monitor = SystemAudioSilenceMonitor()
+        var monitor = AudioSilenceMonitor(source: .system)
 
         XCTAssertFalse(monitor.observe(packet(.microphone, time: 0, seconds: 10, value: 0)))
     }
 
     func testLowLevelNoiseCountsAsSilence() {
-        var monitor = SystemAudioSilenceMonitor()
+        var monitor = AudioSilenceMonitor(source: .system)
 
         XCTAssertTrue(monitor.observe(packet(.system, time: 0, seconds: 6, value: 0.00001)))
+    }
+
+    func testReportsSilentMicrophoneAndIgnoresSystemAudio() {
+        var monitor = AudioSilenceMonitor(source: .microphone)
+
+        XCTAssertFalse(monitor.observe(packet(.system, time: 0, seconds: 10, value: 0)))
+        XCTAssertFalse(monitor.observe(packet(.microphone, time: 0, seconds: 3, value: 0)))
+        XCTAssertTrue(monitor.observe(packet(.microphone, time: 3, seconds: 3, value: 0)))
     }
 
     private func packet(_ source: AudioSource, time: TimeInterval, seconds: Double,
