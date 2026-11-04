@@ -54,6 +54,7 @@ final class MicrophoneSettingsModel: ObservableObject {
         let name = uid.flatMap { uid in devices.first { $0.id == uid }?.name }
         preference = MicrophonePreference(uid: uid, name: name ?? (uid == preference.uid ? preference.name : nil))
         preference.save(to: defaults)
+        testError = nil
         restartTestIfDeviceChanged()
     }
 
@@ -95,7 +96,12 @@ final class MicrophoneSettingsModel: ObservableObject {
                 }
             }
         } catch {
-            testError = RecordingIssueMapper.issue(from: error).message
+            let issue = RecordingIssueMapper.issue(from: error)
+            if issue.code == "capture.stream-failed" {
+                testError = "This input couldn’t start. Check its connection or choose another input, then test again."
+            } else {
+                testError = issue.message
+            }
         }
     }
 
@@ -126,12 +132,13 @@ final class MicrophoneLevelTester {
     func start(device: AudioInputDevice) throws {
         try engine.useInputDevice(device)
         let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
+        let format = input.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw CaptureServiceError.microphoneUnavailable
         }
         let meter = meter
-        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
+        // Rebinding the input can leave the output bus at the previous device's sample rate.
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
             guard let channels = buffer.floatChannelData else { return }
             let frames = Int(buffer.frameLength) * (buffer.format.isInterleaved ? Int(buffer.format.channelCount) : 1)
             let channelCount = buffer.format.isInterleaved ? 1 : Int(buffer.format.channelCount)

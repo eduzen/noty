@@ -56,7 +56,7 @@ struct SettingsView: View {
 
     private var microphoneSection: some View {
         Section {
-            Picker("Microphone", selection: Binding(
+            Picker("Input", selection: Binding(
                 get: { microphone.preference.uid },
                 set: { microphone.select(uid: $0) }
             )) {
@@ -71,7 +71,7 @@ struct SettingsView: View {
             }
             .disabled(controller.hasActiveRecording)
             HStack(spacing: 12) {
-                Button(microphone.isTesting ? "Stop Test" : "Test Microphone") {
+                Button(microphone.isTesting ? "Stop Test" : "Test") {
                     Task { await microphone.toggleTest() }
                 }
                 .disabled(controller.hasActiveRecording)
@@ -88,7 +88,7 @@ struct SettingsView: View {
             Text("Microphone")
         } footer: {
             Text("""
-            Speak while testing. If the bar doesn’t move, choose another microphone. \
+            Speak while testing. If the bar doesn’t move, choose another input. \
             Changes apply to the next recording.
             """)
         }

@@ -35,7 +35,7 @@ final class MicrophoneEngineBackend: AudioCaptureBackend {
         // Bind explicitly even for the default input, so a later default change cannot swap the mic mid-recording.
         try engine.useInputDevice(microphone)
         let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
+        let format = input.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw CaptureServiceError.microphoneUnavailable
         }
@@ -56,9 +56,9 @@ final class MicrophoneEngineBackend: AudioCaptureBackend {
             terminationHandler = onTermination
             stopped = false
         }
-        // Let the input node use its native format. Passing a stale hardware format can make
-        // AVAudioEngine fail with kAudioUnitErr_InvalidElement (-10877) during startup.
-        input.installTap(onBus: 0, bufferSize: Self.bufferFrames, format: nil) { [weak self] buffer, time in
+        // The output bus can retain the previous device's format after rebinding the input.
+        // Set the tap to the selected hardware's native format, including its sample rate.
+        input.installTap(onBus: 0, bufferSize: Self.bufferFrames, format: format) { [weak self] buffer, time in
             self?.handle(buffer, time: time)
         }
         do {
@@ -153,12 +153,14 @@ final class MicrophoneEngineBackend: AudioCaptureBackend {
                 isRetryAllowed: true
             )))
         }
-        // Input device or format changes invalidate the running tap.
+        // Device binding can deliver a delayed notification after startup. A real hardware
+        // format change stops the engine; a still-running engine has not been interrupted.
         let configuration = center.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
             queue: nil
-        ) { [weak self] _ in
+        ) { [weak self, weak engine] _ in
+            guard let engine, !engine.isRunning else { return }
             self?.notify(.interrupted(RecordingIssue(
                 code: "capture.microphone-changed",
                 message: "The microphone configuration changed, so microphone capture stopped.",

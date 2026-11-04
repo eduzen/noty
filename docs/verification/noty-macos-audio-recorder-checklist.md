@@ -10,6 +10,7 @@ Automated checks cannot exercise TCC prompts, the system audio tap against live 
 - `just test-controller` runs controller and status UI tests.
 - `just test-integration` runs the 60-second synthetic AAC integration test.
 - `just test-only AudioTimelineTests` runs one test suite; pass any XCTest suite name.
+- `TEST_RUNNER_NOTY_TEST_MICROPHONE_UID='<input UID>' just test-only MicrophoneHardwareTests` opts into live microphone checks. Run with a headset whose sample rate differs from the default input, then with the built-in input. These tests start capture without saving audio and require Noty's existing microphone grant; ordinary test runs skip them.
 - `just check` runs tests, builds the app, and checks unstaged diff whitespace.
 - `just clean` cleans the local Xcode build products.
 - `just setup-signing` creates a local "Noty Local" signing identity and writes `Config/Signing.local.xcconfig`. Run it once (or use an Apple ID, see `Config/Signing.local.xcconfig.example`). Stable signing keeps permissions across rebuilds.
@@ -60,6 +61,15 @@ Automated checks cannot exercise TCC prompts, the system audio tap against live 
 - Keep test recordings short except for the explicit one-hour scenario.
 - Validate files in Finder or a media player and inspect the audio format and duration with a media tool.
 - Record failures and recovery URLs; do not delete recovery files until their contents have been validated.
+
+## Microphone selection verification — 2026-11-04
+
+- Reproduced headset startup failure with a 24 kHz input and a stale 48 kHz input-node output bus. Both the Settings level test and recording backend failed with Core Audio error -10868 before the fix.
+- Both capture paths now install their taps with the selected hardware's input format. Live checks passed for the 24 kHz headset and 48 kHz built-in input; the recording check validates the native sample rate and channel count across twelve packets without saving audio.
+- A delayed configuration notification arrived after headset startup while the engine was still running with the correct device and format. The recording backend now ignores these notifications while running and continues to report configuration changes that stop the engine.
+- `just check` passed all 172 tests with the headset hardware checks enabled, the Debug build, and the whitespace check. The two live hardware tests also passed separately with the built-in input. `just format` and explicit formatting/lint checks for the new test files passed.
+- The Settings regression confirms that choosing another input clears the previous test error and persists the new choice. Device disconnection and live privacy prompts were not exercised.
+- Restarted the idle app with the rebuilt binary and verified the actual Settings controls. The level meter responded on the headset, stayed active after switching to the built-in input, and responded again after switching back. Left the headset selected and stopped the test.
 
 ## Permission repair verification — 2026-11-01
 
