@@ -18,7 +18,7 @@ protocol RecordingDestinationManaging {
 extension RecordingDestinationStore: RecordingDestinationManaging {}
 
 protocol RecordingWriting: Sendable {
-    func start(at destinationURL: URL) async throws
+    func start(at destinationURL: URL, preferredName: String?) async throws
     func append(_ chunk: MixedAudioChunk) async throws
     func finish() async throws -> RecordingArtifact
     func fail(_ issue: RecordingIssue) async -> RecordingOutcome
@@ -26,6 +26,10 @@ protocol RecordingWriting: Sendable {
 }
 
 extension RecordingWriting {
+    func start(at destinationURL: URL) async throws {
+        try await start(at: destinationURL, preferredName: nil)
+    }
+
     func recoverySessionIdentifier() async -> String? {
         nil
     }
@@ -54,6 +58,7 @@ final class RecordingController: ObservableObject {
     private let recoveryDiscovery: RecoveryDiscovery
     private let recoveryNoticeStore: any RecoveryNoticeStoring
     private let transcriptions: (any RecordingTranscriptionScheduling)?
+    private let meetingNames: any MeetingNameProviding
     private var destinationLease: DestinationLease?
     private var capture: CaptureService?
     private var writer: (any RecordingWriting)?
@@ -92,6 +97,7 @@ final class RecordingController: ObservableObject {
         },
         recoveryNoticeStore: any RecoveryNoticeStoring = RecoveryNoticeStore(),
         transcriptions: (any RecordingTranscriptionScheduling)? = nil,
+        meetingNames: any MeetingNameProviding = NoMeetingName(),
         clock: @escaping () -> TimeInterval = RecordingClock.now
     ) {
         self.permissions = permissions
@@ -101,6 +107,7 @@ final class RecordingController: ObservableObject {
         self.recoveryDiscovery = recoveryDiscovery
         self.recoveryNoticeStore = recoveryNoticeStore
         self.transcriptions = transcriptions
+        self.meetingNames = meetingNames
         self.clock = clock
     }
 
@@ -309,9 +316,12 @@ extension RecordingController {
             currentDestinationURL = lease.url
             guard !stopRequested else { await cancelStartup(); return }
 
+            let meetingName = await meetingNames.meetingName(at: Date())
+            guard !stopRequested else { await cancelStartup(); return }
+
             let writer = writerFactory()
             self.writer = writer
-            try await writer.start(at: lease.url)
+            try await writer.start(at: lease.url, preferredName: meetingName)
             if let identifier = await writer.recoverySessionIdentifier() {
                 startedRecoverySessions.insert(identifier)
             }

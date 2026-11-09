@@ -3,12 +3,15 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var controller: RecordingController
     @ObservedObject var transcriptions: TranscriptionController
+    @ObservedObject var googleCalendar: GoogleCalendarConnectionModel
     @Binding var showMenuBarIcon: Bool
     @StateObject private var microphone = MicrophoneSettingsModel()
 
     var body: some View {
         Form {
             microphoneSection
+
+            googleCalendarSection
 
             Section {
                 LabeledContent("Folder") {
@@ -90,6 +93,42 @@ struct SettingsView: View {
             Text("""
             Speak while testing. If the bar doesn’t move, choose another input. \
             Changes apply to the next recording.
+            """)
+        }
+    }
+
+    private var googleCalendarSection: some View {
+        Section {
+            if googleCalendar.isConfigured {
+                LabeledContent("Status") {
+                    Text(googleCalendar.isConnected ? "Connected" : "Not connected")
+                        .foregroundStyle(.secondary)
+                }
+                if googleCalendar.isConnected {
+                    Button("Disconnect Google Calendar", role: .destructive) {
+                        Task { await googleCalendar.disconnect() }
+                    }
+                } else {
+                    Button("Connect Google Calendar…") {
+                        Task { await googleCalendar.connect() }
+                    }
+                    .disabled(googleCalendar.isConnecting)
+                }
+            } else {
+                Text("Google Calendar is not set up in this build.")
+                    .foregroundStyle(.secondary)
+            }
+            if let error = googleCalendar.errorMessage {
+                Text(error)
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("Google Calendar")
+        } footer: {
+            Text("""
+            When you start a recording, Noty uses the title of the Google Calendar event in progress as the \
+            file name. It reads event titles and times only. Without a matching event, the file keeps its \
+            timestamp name.
             """)
         }
     }

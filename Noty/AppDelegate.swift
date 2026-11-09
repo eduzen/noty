@@ -4,12 +4,16 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller: RecordingController
     let transcriptions: TranscriptionController
+    let googleCalendar: GoogleCalendarConnectionModel
     private var terminationReplyPending = false
 
     override init() {
         let transcriptions = TranscriptionController()
+        let account = GoogleCalendarAccount()
+        let meetingNames = CalendarMeetingNameProvider(source: GoogleCalendarEventSource(account: account))
         self.transcriptions = transcriptions
-        controller = RecordingController(transcriptions: transcriptions)
+        googleCalendar = GoogleCalendarConnectionModel(account: account)
+        controller = RecordingController(transcriptions: transcriptions, meetingNames: meetingNames)
         super.init()
     }
 

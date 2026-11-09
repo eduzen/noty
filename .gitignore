@@ -20,6 +20,9 @@ xcuserdata/
 ## Local signing identity (per machine; see Config/Signing.local.xcconfig.example)
 Config/Signing.local.xcconfig
 
+## Google OAuth client (per machine; see Config/Google.local.xcconfig.example)
+Config/Google.local.xcconfig
+
 ## Other
 *.moved-aside
 *.xccheckout

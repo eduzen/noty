@@ -37,7 +37,7 @@ actor RecordingWriter {
         self.recoveryNoticeStore = recoveryNoticeStore
     }
 
-    func start(at destinationURL: URL) async throws {
+    func start(at destinationURL: URL, preferredName: String?) async throws {
         guard case .idle = state else {
             throw issue("writer.invalid-state", "The recording writer has already been started.")
         }
@@ -48,7 +48,8 @@ actor RecordingWriter {
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.timeZone = .current
             formatter.dateFormat = "EEE-dd-MM-yy-HH.mm"
-            let recordingName = formatter.string(from: now()).lowercased()
+            let recordingName = MeetingFileName.stem(from: preferredName)
+                ?? formatter.string(from: now()).lowercased()
             self.recordingName = recordingName
             let id = UUID().uuidString
             let temp = destinationURL.appendingPathComponent(".noty-\(id).tmp.m4a")

@@ -115,6 +115,34 @@ final class RecordingControllerTests: XCTestCase {
         XCTAssertEqual(snapshot.startCount, 0)
     }
 
+    func testStartPassesMeetingNameToWriter() async {
+        let writer = FakeRecordingWriter()
+        let controller = makeController(writer: writer, meetingNames: FixedMeetingName(name: "Design review"))
+
+        await controller.start()
+        XCTAssertEqual(controller.state, .recording)
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        XCTAssertEqual(snapshot.preferredNames, ["Design review"])
+        XCTAssertNil(controller.latestIssue)
+    }
+
+    func testCalendarFailureStillStartsRecordingWithTimestampName() async {
+        let writer = FakeRecordingWriter()
+        let lookup = CalendarMeetingNameProvider(source: ThrowingCalendarSource())
+        let controller = makeController(writer: writer, meetingNames: lookup)
+
+        await controller.start()
+        XCTAssertEqual(controller.state, .recording)
+        await controller.stop()
+
+        let snapshot = await writer.snapshot()
+        XCTAssertEqual(snapshot.startCount, 1)
+        XCTAssertEqual(snapshot.preferredNames, [nil])
+        XCTAssertNil(controller.latestIssue)
+    }
+
     func testCaptureStartupFailureDisplaysHelpfulMessageWithoutFrameworkDiagnostic() async {
         let message = "System audio capture could not create process tap (OSStatus 1852797029)."
         let backend = StartupFailingAudioBackend(error: CaptureServiceError.streamFailure(message))
@@ -813,6 +841,7 @@ final class RecordingControllerTests: XCTestCase {
         recoveryDiscovery: @escaping RecordingController.RecoveryDiscovery = { _ in [] },
         recoveryNoticeStore: any RecoveryNoticeStoring = MemoryRecoveryNoticeStore(),
         transcriptions: (any RecordingTranscriptionScheduling)? = nil,
+        meetingNames: any MeetingNameProviding = NoMeetingName(),
         clock: @escaping () -> TimeInterval = RecordingClock.now
     ) -> RecordingController {
         let resolvedPermissions = permissions ?? FakePermissions()
@@ -827,6 +856,7 @@ final class RecordingControllerTests: XCTestCase {
             recoveryDiscovery: recoveryDiscovery,
             recoveryNoticeStore: recoveryNoticeStore,
             transcriptions: transcriptions,
+            meetingNames: meetingNames,
             clock: clock
         )
     }
@@ -841,6 +871,20 @@ final class RecordingControllerTests: XCTestCase {
             frameCount: frames,
             samples: Array(repeating: [left, right], count: frames).flatMap { $0 }
         )
+    }
+}
+
+private struct FixedMeetingName: MeetingNameProviding {
+    let name: String
+
+    func meetingName(at _: Date) async -> String? {
+        name
+    }
+}
+
+private struct ThrowingCalendarSource: CalendarEventSource {
+    func events(from _: Date, to _: Date) async throws -> [CalendarEvent] {
+        throw GoogleCalendarError.notConnected
     }
 }
 
@@ -989,6 +1033,7 @@ private actor FakeRecordingWriter: RecordingWriting {
         let finishCount: Int
         let failCount: Int
         let chunks: [MixedAudioChunk]
+        let preferredNames: [String?]
     }
 
     private let artifact = RecordingArtifact(url: URL(fileURLWithPath: "/recordings/Noty-test.m4a"), duration: 0)
@@ -1002,6 +1047,7 @@ private actor FakeRecordingWriter: RecordingWriting {
     private var finishCount = 0
     private var failCount = 0
     private var chunks: [MixedAudioChunk] = []
+    private var preferredNames: [String?] = []
     private var failureWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(appendIssue: RecordingIssue? = nil, failureOutcome: RecordingOutcome? = nil,
@@ -1016,8 +1062,9 @@ private actor FakeRecordingWriter: RecordingWriting {
         recoverySessionID
     }
 
-    func start(at _: URL) async throws {
+    func start(at _: URL, preferredName: String?) async throws {
         startCount += 1
+        preferredNames.append(preferredName)
     }
 
     func append(_ chunk: MixedAudioChunk) async throws {
@@ -1062,7 +1109,8 @@ private actor FakeRecordingWriter: RecordingWriting {
             appendCount: appendCount,
             finishCount: finishCount,
             failCount: failCount,
-            chunks: chunks
+            chunks: chunks,
+            preferredNames: preferredNames
         )
     }
 }

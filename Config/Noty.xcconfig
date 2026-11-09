@@ -7,4 +7,9 @@
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = -
 
+// Google Calendar OAuth client. Set these in Config/Google.local.xcconfig (see the .example file).
+GOOGLE_OAUTH_CLIENT_ID =
+GOOGLE_OAUTH_REVERSED_CLIENT_ID = com.googleusercontent.apps.unconfigured
+
 #include? "Signing.local.xcconfig"
+#include? "Google.local.xcconfig"

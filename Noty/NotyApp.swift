@@ -16,6 +16,7 @@ struct NotyApp: App {
             SettingsView(
                 controller: appDelegate.controller,
                 transcriptions: appDelegate.transcriptions,
+                googleCalendar: appDelegate.googleCalendar,
                 showMenuBarIcon: $showMenuBarIcon
             )
         }

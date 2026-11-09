@@ -18,6 +18,25 @@ final class RecordingWriterTests: XCTestCase {
         XCTAssertEqual(duplicateFinish, artifact)
     }
 
+    func testMeetingNameNamesRecordingWithSanitizedStem() async throws {
+        let fixture = Fixture()
+        let writer = fixture.makeWriter()
+        try await writer.start(at: fixture.folder, preferredName: "Design: review/Q3")
+        try await writer.append(chunk(time: 0))
+        let artifact = try await writer.finish()
+        XCTAssertEqual(artifact.url.lastPathComponent, "Design review Q3.m4a")
+        XCTAssertTrue(fixture.fileSystem.exists.contains(artifact.url))
+    }
+
+    func testBlankMeetingNameFallsBackToTimestamp() async throws {
+        let fixture = Fixture()
+        let writer = fixture.makeWriter()
+        try await writer.start(at: fixture.folder, preferredName: " .. ")
+        try await writer.append(chunk(time: 0))
+        let artifact = try await writer.finish()
+        XCTAssertEqual(artifact.url.lastPathComponent, "fri-23-10-26-12.00.m4a")
+    }
+
     func testDistinctWritersNeverOverwriteSameTimestampRecording() async throws {
         let fixture = Fixture()
         let first = fixture.makeWriter()
