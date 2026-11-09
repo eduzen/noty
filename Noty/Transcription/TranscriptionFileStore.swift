@@ -92,6 +92,10 @@ struct TranscriptionFileStore: Sendable {
         }
     }
 
+    func matchesExport(_ reservation: ExportReservation, at url: URL) -> Bool {
+        (try? fileDigest(url)) == reservation.digest
+    }
+
     func reserveExport(sourceURL: URL, text: String, previous: ExportReservation?) throws -> ExportReservation {
         let digest = Self.digest(Data(text.utf8))
         if let previous, previous.url.deletingLastPathComponent() == sourceURL.deletingLastPathComponent(),

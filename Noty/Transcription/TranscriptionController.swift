@@ -11,6 +11,7 @@ protocol RecordingTranscriptionScheduling: AnyObject {
 
 @MainActor
 final class TranscriptionController: ObservableObject, RecordingTranscriptionScheduling {
+    let playback: AudioPlaybackController
     @Published private(set) var jobs: [TranscriptionJob] = []
     @Published private(set) var modelState: TranscriptionModelState = .notInstalled
     @Published private(set) var automaticEnabled = false
@@ -18,9 +19,11 @@ final class TranscriptionController: ObservableObject, RecordingTranscriptionSch
     @Published private(set) var progress: Double?
     @Published private(set) var progressMessage: String?
     @Published private(set) var issue: String?
+    @Published private(set) var deletingJobID: UUID?
 
     private let store: TranscriptionFileStore
     private let worker: any TranscriptionWorkerRunning
+    private let trashItem: (URL) throws -> Void
     @Published private var didBootstrap = false
     private var persistenceBlocked = false
     private var isSuspending = false
@@ -30,17 +33,27 @@ final class TranscriptionController: ObservableObject, RecordingTranscriptionSch
     private var workTask: Task<Void, Never>?
 
     init(store: TranscriptionFileStore = TranscriptionFileStore(),
-         worker: (any TranscriptionWorkerRunning)? = nil) {
+         worker: (any TranscriptionWorkerRunning)? = nil,
+         playback: AudioPlaybackController? = nil,
+         trashItem: @escaping (URL) throws -> Void = {
+             try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+         }) {
         self.store = store
         self.worker = worker ?? TranscriptionWorkerProcess()
+        self.playback = playback ?? AudioPlaybackController()
+        self.trashItem = trashItem
     }
 
     var canPrepareModels: Bool {
-        didBootstrap && !isRecording && workTask == nil && !persistenceBlocked
+        didBootstrap && !isRecording && workTask == nil && !persistenceBlocked && deletingJobID == nil
     }
 
     var canImport: Bool {
-        !persistenceBlocked && !isTerminating
+        !persistenceBlocked && !isTerminating && deletingJobID == nil
+    }
+
+    var canDeleteJobs: Bool {
+        canImport && !isSuspending
     }
 
     func bootstrap() async {
@@ -165,8 +178,84 @@ final class TranscriptionController: ObservableObject, RecordingTranscriptionSch
         pump()
     }
 
+    func delete(_ id: UUID) async {
+        guard canDeleteJobs, let selected = jobs.first(where: { $0.id == id }) else { return }
+        let relatedIDs = Set(jobs.filter {
+            $0.sourceURL.standardizedFileURL == selected.sourceURL.standardizedFileURL
+        }.map(\.id))
+        deletingJobID = id
+        issue = nil
+        defer {
+            deletingJobID = nil
+            pump()
+        }
+        guard persist() else { return }
+        if let playingID = playback.activeID, relatedIDs.contains(playingID) {
+            playback.stop()
+        }
+
+        do {
+            if let activeID = activeJobID, relatedIDs.contains(activeID) {
+                let task = workTask
+                try await worker.stop()
+                if activeJobID == activeID {
+                    modify(activeID) { $0.status = .cancelled }
+                    invalidateWork(requeue: false)
+                }
+                // A detached staging copy must finish before its job directory can be removed.
+                await task?.value
+            }
+            guard !isTerminating, !persistenceBlocked,
+                  let job = jobs.first(where: { $0.id == id }) else { return }
+            let access = try resolveSource(job)
+            defer { access.lease.close() }
+            guard !persistenceBlocked else { return }
+            try trashRecordingFiles(source: access.url, identity: job.identity,
+                                    relatedJobs: jobs.filter { relatedIDs.contains($0.id) })
+
+            let previousJobs = jobs
+            jobs.removeAll { relatedIDs.contains($0.id) }
+            guard persist() else {
+                jobs = previousJobs
+                return
+            }
+            for jobID in relatedIDs {
+                try? store.removeJob(jobID: jobID)
+            }
+        } catch {
+            issue = "Could not move the recording and transcript to Trash: \(error.localizedDescription)"
+        }
+    }
+
+    private func trashRecordingFiles(source: URL, identity: TranscriptionSourceIdentity,
+                                     relatedJobs: [TranscriptionJob]) throws {
+        let files = FileManager.default
+        if files.fileExists(atPath: source.path) {
+            guard try TranscriptionSourceIdentity(url: source) == identity else {
+                throw TranscriptionError.sourceChanged
+            }
+            try trashItem(source)
+        }
+        let folder = source.deletingLastPathComponent()
+        var transcripts = Set(relatedJobs.compactMap(\.lastExport).map {
+            folder.appendingPathComponent($0.url.lastPathComponent)
+        })
+        for job in relatedJobs {
+            guard let reserved = job.exportReservation else { continue }
+            let url = folder.appendingPathComponent(reserved.url.lastPathComponent)
+            if store.matchesExport(reserved, at: url) {
+                transcripts.insert(url)
+            }
+        }
+        for transcript in transcripts.sorted(by: { $0.path < $1.path })
+            where files.fileExists(atPath: transcript.path) {
+            try trashItem(transcript)
+        }
+    }
+
     func suspendForRecording() async throws {
         isRecording = true
+        playback.stop()
         await bootstrap()
         isSuspending = true
         defer { isSuspending = false }
@@ -184,6 +273,7 @@ final class TranscriptionController: ObservableObject, RecordingTranscriptionSch
 
     func prepareForTermination() async {
         isTerminating = true
+        playback.stop()
         await bootstrap()
         await interrupt(requeue: true)
         persist()
@@ -192,6 +282,11 @@ final class TranscriptionController: ObservableObject, RecordingTranscriptionSch
     func cancelTermination() {
         isTerminating = false
         pump()
+    }
+
+    func togglePlayback(_ job: TranscriptionJob) {
+        guard !isRecording, !isTerminating, deletingJobID == nil else { return }
+        playback.toggle(id: job.id) { try resolveSource(job) }
     }
 
     func openTranscript(_ job: TranscriptionJob) {
@@ -213,6 +308,7 @@ final class TranscriptionController: ObservableObject, RecordingTranscriptionSch
 
     private func pump() {
         guard didBootstrap, !isRecording, !isSuspending, !isTerminating, !persistenceBlocked,
+              deletingJobID == nil,
               modelState == .ready, workTask == nil,
               let id = jobs.first(where: { $0.status == .waiting })?.id else { return }
         activeJobID = id

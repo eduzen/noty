@@ -2,8 +2,14 @@ import SwiftUI
 
 struct TranscriptionView: View {
     @ObservedObject var controller: TranscriptionController
+    @ObservedObject private var playback: AudioPlaybackController
     @State private var isImporting = false
     @State private var sortOrder = [KeyPathComparator(\TranscriptionJob.identity.modified, order: .reverse)]
+
+    init(controller: TranscriptionController) {
+        self.controller = controller
+        playback = controller.playback
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -35,6 +41,13 @@ struct TranscriptionView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if let issue = playback.issue {
+                Label(issue, systemImage: "speaker.slash")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
+
             if controller.isRecording, controller.jobs.contains(where: \.canCancel) {
                 Text("Transcription will resume after recording stops.")
                     .font(.caption)
@@ -53,6 +66,7 @@ struct TranscriptionView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                     .help(job.sourceURL.path)
+                    .background(PlaybackRowProgress(progress: playbackProgress(for: job)))
             }
             .width(min: 160, ideal: 240)
 
@@ -74,9 +88,9 @@ struct TranscriptionView: View {
             .width(min: 140, ideal: 170)
 
             TableColumn("Actions") { job in
-                TranscriptionActionsCell(controller: controller, job: job)
+                TranscriptionActionsCell(controller: controller, playback: playback, job: job)
             }
-            .width(min: 110, ideal: 120)
+            .width(min: 120, ideal: 130)
         }
         .frame(minHeight: 200)
         .overlay {
@@ -85,6 +99,11 @@ struct TranscriptionView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func playbackProgress(for job: TranscriptionJob) -> Double? {
+        guard playback.activeID == job.id, playback.duration > 0 else { return nil }
+        return playback.currentTime / playback.duration
     }
 }
 
@@ -130,10 +149,22 @@ private struct TranscriptionStatusCell: View {
 
 private struct TranscriptionActionsCell: View {
     @ObservedObject var controller: TranscriptionController
+    @ObservedObject var playback: AudioPlaybackController
     let job: TranscriptionJob
 
     var body: some View {
+        let isPlaying = playback.activeID == job.id && playback.isPlaying
+        let action = isPlaying ? "Pause" : "Play"
         HStack(spacing: 12) {
+            Button {
+                controller.togglePlayback(job)
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+            }
+            .help("\(action) audio")
+            .accessibilityLabel("\(action) \(job.displayName)")
+            .disabled(controller.isRecording)
+
             if job.lastExport != nil {
                 Button {
                     controller.openTranscript(job)
@@ -170,8 +201,18 @@ private struct TranscriptionActionsCell: View {
                 .help("Cancel")
                 .accessibilityLabel("Cancel")
             }
+
+            Button(role: .destructive) {
+                Task { await controller.delete(job.id) }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .help("Move Audio and Transcript to Trash")
+            .accessibilityLabel("Move \(job.displayName) and its transcript to Trash")
+            .disabled(!controller.canDeleteJobs)
         }
         .buttonStyle(.borderless)
         .labelStyle(.iconOnly)
+        .disabled(controller.deletingJobID != nil)
     }
 }

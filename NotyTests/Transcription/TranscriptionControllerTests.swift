@@ -4,6 +4,169 @@ import XCTest
 
 @MainActor
 final class TranscriptionControllerTests: XCTestCase {
+    func testDeleteTrashesAudioAndExportStopsPlaybackAndPersistsRemoval() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let unrelated = fixture.folder.appendingPathComponent("meeting.txt")
+        try Data("User notes".utf8).write(to: unrelated)
+        let worker = TestTranscriptionWorker()
+        worker.completeAutomatically = true
+        let playback = AudioPlaybackController(makePlayer: { _ in PlaybackTestPlayer() })
+        let controller = TranscriptionController(store: fixture.store, worker: worker, playback: playback,
+                                                 trashItem: fixture.trash)
+        await controller.enqueue(sourceURL: fixture.audio, duration: 10, folderBookmark: nil)
+        await waitUntil { controller.jobs.first?.status == .complete }
+        let job = try XCTUnwrap(controller.jobs.first)
+        let transcript = try XCTUnwrap(job.lastExport?.url)
+        controller.togglePlayback(job)
+
+        await controller.delete(job.id)
+
+        XCTAssertTrue(controller.jobs.isEmpty)
+        XCTAssertFalse(playback.isPlaying)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.audio.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: transcript.path))
+        XCTAssertEqual(try String(contentsOf: fixture.trashed(fixture.audio), encoding: .utf8), "fixture")
+        XCTAssertEqual(try String(contentsOf: fixture.trashed(transcript), encoding: .utf8),
+                       "[00:00:00] Speaker 1: Hello\n")
+        XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "User notes")
+        XCTAssertTrue(try XCTUnwrap(fixture.store.load(TranscriptionSnapshot.self)).jobs.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.store.jobDirectory(id: job.id).path))
+    }
+
+    func testDeleteStopsActiveTranscriptionBeforeRemovingItsFiles() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let worker = TestTranscriptionWorker()
+        let controller = TranscriptionController(store: fixture.store, worker: worker, trashItem: fixture.trash)
+        await controller.enqueue(sourceURL: fixture.audio, duration: 10, folderBookmark: nil)
+        await worker.waitForRun()
+        let id = try XCTUnwrap(controller.jobs.first?.id)
+
+        await controller.delete(id)
+
+        XCTAssertTrue(controller.jobs.isEmpty)
+        XCTAssertNil(controller.deletingJobID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.audio.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.store.jobDirectory(id: id).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.trashed(fixture.audio).path))
+        XCTAssertEqual(worker.stopCount, 1)
+    }
+
+    func testDeleteFailureKeepsTheRowAndAllowsRetryAfterPartialTrash() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let worker = TestTranscriptionWorker()
+        worker.completeAutomatically = true
+        var failTranscript = true
+        let controller = TranscriptionController(store: fixture.store, worker: worker, trashItem: { url in
+            if url.pathExtension == "txt", failTranscript {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            try fixture.trash(url)
+        })
+        await controller.enqueue(sourceURL: fixture.audio, duration: 10, folderBookmark: nil)
+        await waitUntil { controller.jobs.first?.status == .complete }
+        let job = try XCTUnwrap(controller.jobs.first)
+        let transcript = try XCTUnwrap(job.lastExport?.url)
+
+        await controller.delete(job.id)
+
+        XCTAssertEqual(controller.jobs.count, 1)
+        XCTAssertNotNil(controller.issue)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: transcript.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.trashed(fixture.audio).path))
+        failTranscript = false
+        await controller.delete(job.id)
+        XCTAssertTrue(controller.jobs.isEmpty)
+        XCTAssertNil(controller.issue)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.trashed(transcript).path))
+    }
+
+    func testDeleteDoesNotTrashAReplacedAudioFile() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let worker = TestTranscriptionWorker()
+        let controller = TranscriptionController(store: fixture.store, worker: worker, trashItem: fixture.trash)
+        try await controller.suspendForRecording()
+        await controller.enqueue(sourceURL: fixture.audio, duration: 10, folderBookmark: nil)
+        let id = try XCTUnwrap(controller.jobs.first?.id)
+        try Data("A different recording".utf8).write(to: fixture.audio)
+
+        await controller.delete(id)
+
+        XCTAssertEqual(controller.jobs.count, 1)
+        XCTAssertNotNil(controller.issue)
+        XCTAssertEqual(try String(contentsOf: fixture.audio, encoding: .utf8), "A different recording")
+    }
+
+    func testDeleteIncludesAPublishedExportAwaitingQueueRecovery() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let text = "Recovered transcript"
+        let reservation = try fixture.store.reserveExport(sourceURL: fixture.audio, text: text, previous: nil)
+        try fixture.store.publish(text: text, reservation: reservation)
+        var job = try TranscriptionJob(sourceURL: fixture.audio,
+                                       identity: TranscriptionSourceIdentity(url: fixture.audio), duration: 10)
+        job.exportReservation = reservation
+        job.pendingExportText = text
+        job.pendingCompletionStatus = .complete
+        try fixture.store.save(TranscriptionSnapshot(jobs: [job]))
+        let controller = TranscriptionController(store: fixture.store, worker: TestTranscriptionWorker(),
+                                                 trashItem: fixture.trash)
+        await controller.bootstrap()
+
+        await controller.delete(job.id)
+
+        XCTAssertTrue(controller.jobs.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: reservation.url.path))
+        XCTAssertEqual(try String(contentsOf: fixture.trashed(reservation.url), encoding: .utf8), text)
+    }
+
+    func testDeletePreservesAnUnrelatedFileAtAnUnpublishedExportReservation() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let reservation = try fixture.store.reserveExport(sourceURL: fixture.audio, text: "Transcript", previous: nil)
+        try Data("User notes".utf8).write(to: reservation.url)
+        var job = try TranscriptionJob(sourceURL: fixture.audio,
+                                       identity: TranscriptionSourceIdentity(url: fixture.audio), duration: 10)
+        job.exportReservation = reservation
+        job.pendingExportText = "Transcript"
+        job.pendingCompletionStatus = .complete
+        try fixture.store.save(TranscriptionSnapshot(jobs: [job]))
+        let controller = TranscriptionController(store: fixture.store, worker: TestTranscriptionWorker(),
+                                                 trashItem: fixture.trash)
+        await controller.bootstrap()
+
+        await controller.delete(job.id)
+
+        XCTAssertTrue(controller.jobs.isEmpty)
+        XCTAssertEqual(try String(contentsOf: reservation.url, encoding: .utf8), "User notes")
+    }
+
+    func testRecordingStopsPlaybackAndPreventsRestartUntilRecordingEnds() async throws {
+        let fixture = try TranscriptionFixture()
+        defer { fixture.cleanup() }
+        let player = PlaybackTestPlayer()
+        let playback = AudioPlaybackController(makePlayer: { _ in player })
+        let controller = TranscriptionController(store: fixture.store, worker: TestTranscriptionWorker(),
+                                                 playback: playback)
+        let job = try TranscriptionJob(sourceURL: fixture.audio, folderBookmark: nil,
+                                       identity: TranscriptionSourceIdentity(url: fixture.audio), duration: 10)
+        controller.togglePlayback(job)
+        XCTAssertTrue(playback.isPlaying)
+        try await controller.suspendForRecording()
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertNil(playback.activeID)
+        controller.togglePlayback(job)
+        XCTAssertFalse(playback.isPlaying)
+        controller.resumeAfterRecording()
+        controller.togglePlayback(job)
+        XCTAssertTrue(playback.isPlaying)
+        await controller.prepareForTermination()
+        XCTAssertFalse(player.isPlaying)
+    }
+
     func testRecordingSuspendsWorkerAndKeepsJobQueued() async throws {
         let fixture = try TranscriptionFixture()
         defer { fixture.cleanup() }
@@ -182,6 +345,17 @@ private struct TranscriptionFixture {
 
     func cleanup() {
         try? FileManager.default.removeItem(at: folder)
+    }
+
+    func trashed(_ url: URL) -> URL {
+        folder.appendingPathComponent("Trash").appendingPathComponent(url.lastPathComponent)
+    }
+
+    func trash(_ url: URL) throws {
+        let destination = trashed(url)
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: url, to: destination)
     }
 }
 
