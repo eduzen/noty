@@ -93,3 +93,6 @@ DerivedData/
 # Secrets
 .env
 .env.*
+
+
+google.plist
