@@ -26,20 +26,9 @@
 	<string>Noty records your microphone alongside system audio when you start a recording.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Noty captures system audio when you start a recording.</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>Google OAuth</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>$(GOOGLE_OAUTH_REVERSED_CLIENT_ID)</string>
-			</array>
-		</dict>
-	</array>
 	<key>GoogleOAuthClientID</key>
 	<string>$(GOOGLE_OAUTH_CLIENT_ID)</string>
-	<key>GoogleOAuthReversedClientID</key>
-	<string>$(GOOGLE_OAUTH_REVERSED_CLIENT_ID)</string>
+	<key>GoogleOAuthClientSecret</key>
+	<string>$(GOOGLE_OAUTH_CLIENT_SECRET)</string>
 </dict>
 </plist>

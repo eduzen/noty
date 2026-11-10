@@ -8,6 +8,9 @@ enum GoogleCalendarError: Error, Equatable, LocalizedError {
     case invalidResponse
     case requestFailed(statusCode: Int)
     case tokenRevoked
+    case authorizationCancelled
+    case authorizationTimedOut
+    case browserUnavailable
     case keychain(OSStatus)
 
     var errorDescription: String? {
@@ -18,6 +21,12 @@ enum GoogleCalendarError: Error, Equatable, LocalizedError {
             return "Google Calendar is not connected."
         case .authorizationFailed:
             return "Google did not finish signing in. Try connecting again."
+        case .authorizationCancelled:
+            return "Google sign-in was cancelled."
+        case .authorizationTimedOut:
+            return "Google sign-in timed out. Try connecting again."
+        case .browserUnavailable:
+            return "Noty could not open your browser for Google sign-in."
         case .invalidResponse:
             return "Google Calendar returned an unexpected response."
         case let .requestFailed(statusCode):
@@ -72,12 +81,13 @@ actor GoogleCalendarAccount {
         tokens.refreshToken() != nil
     }
 
-    func authorizationURL(for request: GoogleOAuthCodeRequest) throws -> URL {
+    /// `redirectURI` is the loopback address of the local listener, for example `http://127.0.0.1:50123/`.
+    func authorizationURL(for request: GoogleOAuthCodeRequest, redirectURI: String) throws -> URL {
         guard let configuration else { throw GoogleCalendarError.notConfigured }
         var components = URLComponents(url: Self.authorizationEndpoint, resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "client_id", value: configuration.clientID),
-            URLQueryItem(name: "redirect_uri", value: configuration.redirectURI),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: Self.scope),
             URLQueryItem(name: "code_challenge", value: request.codeChallenge),
@@ -90,21 +100,16 @@ actor GoogleCalendarAccount {
         return url
     }
 
-    /// Validates the browser callback, exchanges the code, and stores the refresh token.
-    func completeAuthorization(callbackURL: URL, request: GoogleOAuthCodeRequest) async throws {
+    /// Exchanges an authorization code the listener already validated, then stores the refresh token.
+    func completeAuthorization(code: String, request: GoogleOAuthCodeRequest, redirectURI: String) async throws {
         guard let configuration else { throw GoogleCalendarError.notConfigured }
-        let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard value(named: "state", in: items) == request.state,
-              let code = value(named: "code", in: items)
-        else { throw GoogleCalendarError.authorizationFailed }
-
-        let response = try await requestToken([
+        let response = try await requestToken(withSecret(configuration, [
             "client_id": configuration.clientID,
             "code": code,
             "code_verifier": request.codeVerifier,
             "grant_type": "authorization_code",
-            "redirect_uri": configuration.redirectURI
-        ])
+            "redirect_uri": redirectURI
+        ]))
         guard let refreshToken = response.refreshToken else { throw GoogleCalendarError.authorizationFailed }
         try tokens.saveRefreshToken(refreshToken)
         cache(response)
@@ -134,11 +139,11 @@ actor GoogleCalendarAccount {
         guard let configuration else { throw GoogleCalendarError.notConfigured }
         guard let refreshToken = tokens.refreshToken() else { throw GoogleCalendarError.notConnected }
         do {
-            let response = try await requestToken([
+            let response = try await requestToken(withSecret(configuration, [
                 "client_id": configuration.clientID,
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken
-            ])
+            ]))
             cache(response)
             return response.accessToken
         } catch GoogleCalendarError.tokenRevoked {
@@ -186,8 +191,12 @@ actor GoogleCalendarAccount {
             .joined(separator: "&")
     }
 
-    private func value(named name: String, in items: [URLQueryItem]) -> String? {
-        items.first(where: { $0.name == name })?.value
+    private func withSecret(_ configuration: GoogleCalendarConfiguration, _ parameters: [String: String])
+        -> [String: String] {
+        guard let secret = configuration.clientSecret else { return parameters }
+        var merged = parameters
+        merged["client_secret"] = secret
+        return merged
     }
 }
 

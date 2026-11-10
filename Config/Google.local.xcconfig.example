@@ -1,12 +1,12 @@
-// Copy this file to Config/Google.local.xcconfig (gitignored) and fill in the values for an
-// iOS-type OAuth client from Google Cloud Console (APIs & Services > Credentials).
-// The client must use the bundle ID com.eduzen.noty.
+// Copy this file to Config/Google.local.xcconfig (gitignored) and fill in the values for a
+// Desktop-type OAuth client from Google Cloud Console (APIs & Services > Credentials,
+// Application type: Desktop app). Enable the Google Calendar API in the same project.
 //
 // Example values:
 // GOOGLE_OAUTH_CLIENT_ID = 1234567890-abcdef.apps.googleusercontent.com
-// GOOGLE_OAUTH_REVERSED_CLIENT_ID = com.googleusercontent.apps.1234567890-abcdef
+// GOOGLE_OAUTH_CLIENT_SECRET = GOCSPX-example
 //
-// Leave both empty to keep Google Calendar disabled. Recordings keep timestamp names.
+// Leave the client ID empty to keep Google Calendar disabled. Recordings keep timestamp names.
 
 GOOGLE_OAUTH_CLIENT_ID =
-GOOGLE_OAUTH_REVERSED_CLIENT_ID =
+GOOGLE_OAUTH_CLIENT_SECRET =

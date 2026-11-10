@@ -1,22 +1,20 @@
 import AppKit
-import AuthenticationServices
 import Combine
 import Foundation
 
-/// Drives the Settings sign-in: runs the browser session and reports connection state.
+/// Drives the Settings sign-in: opens the default browser, receives the loopback redirect,
+/// and reports connection state.
 @MainActor
-final class GoogleCalendarConnectionModel: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
+final class GoogleCalendarConnectionModel: ObservableObject {
     @Published private(set) var isConnected: Bool
     @Published private(set) var isConnecting = false
     @Published private(set) var errorMessage: String?
 
     let account: GoogleCalendarAccount
-    private var authorizationSession: ASWebAuthenticationSession?
 
     init(account: GoogleCalendarAccount) {
         self.account = account
         isConnected = account.isConnected
-        super.init()
     }
 
     var isConfigured: Bool {
@@ -25,23 +23,27 @@ final class GoogleCalendarConnectionModel: NSObject, ObservableObject, ASWebAuth
 
     func connect() async {
         guard !isConnecting else { return }
-        guard let configuration = account.configuration else {
+        guard account.configuration != nil else {
             errorMessage = GoogleCalendarError.notConfigured.localizedDescription
             return
         }
         isConnecting = true
         errorMessage = nil
-        defer {
-            isConnecting = false
-            authorizationSession = nil
-        }
+        defer { isConnecting = false }
+
         let request = GoogleOAuthCodeRequest.make()
+        let listener = LoopbackRedirectListener()
+        defer { listener.cancel() }
         do {
-            let url = try await account.authorizationURL(for: request)
-            let callbackURL = try await runAuthorizationSession(url: url, callbackScheme: configuration.redirectScheme)
-            try await account.completeAuthorization(callbackURL: callbackURL, request: request)
+            let port = try await listener.start()
+            let redirectURI = "http://127.0.0.1:\(port)/"
+            let url = try await account.authorizationURL(for: request, redirectURI: redirectURI)
+            guard NSWorkspace.shared.open(url) else { throw GoogleCalendarError.browserUnavailable }
+            let redirect = try await listener.awaitRedirect()
+            let code = try GoogleOAuthRedirect.authorizationCode(from: redirect, expectedState: request.state)
+            try await account.completeAuthorization(code: code, request: request, redirectURI: redirectURI)
             isConnected = account.isConnected
-        } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+        } catch GoogleCalendarError.authorizationCancelled {
             return
         } catch {
             errorMessage = error.localizedDescription
@@ -56,28 +58,5 @@ final class GoogleCalendarConnectionModel: NSObject, ObservableObject, ASWebAuth
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-
-    private func runAuthorizationSession(url: URL, callbackScheme: String) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(
-                url: url, callbackURLScheme: callbackScheme
-            ) { callbackURL, error in
-                if let callbackURL {
-                    continuation.resume(returning: callbackURL)
-                } else {
-                    continuation.resume(throwing: error ?? GoogleCalendarError.authorizationFailed)
-                }
-            }
-            session.presentationContextProvider = self
-            authorizationSession = session
-            if !session.start() {
-                continuation.resume(throwing: GoogleCalendarError.authorizationFailed)
-            }
-        }
-    }
-
-    func presentationAnchor(for _: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor()
     }
 }

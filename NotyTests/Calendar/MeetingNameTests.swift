@@ -125,24 +125,24 @@ final class MeetingFileNameTests: XCTestCase {
 }
 
 final class GoogleCalendarConfigurationTests: XCTestCase {
-    func testMatchingClientIDAndReversedSchemeAreAccepted() throws {
-        let configuration = try XCTUnwrap(GoogleCalendarConfiguration(
+    func testDesktopClientIDIsAcceptedWithOrWithoutSecret() throws {
+        let withSecret = try XCTUnwrap(GoogleCalendarConfiguration(
             clientID: "1234-abc.apps.googleusercontent.com",
-            reversedClientID: "com.googleusercontent.apps.1234-abc"
+            clientSecret: " GOCSPX-test \n"
         ))
-        XCTAssertEqual(configuration.redirectURI, "com.googleusercontent.apps.1234-abc:/oauth2redirect")
+        XCTAssertEqual(withSecret.clientSecret, "GOCSPX-test")
+
+        let withoutSecret = try XCTUnwrap(GoogleCalendarConfiguration(
+            clientID: "1234-abc.apps.googleusercontent.com",
+            clientSecret: ""
+        ))
+        XCTAssertNil(withoutSecret.clientSecret)
     }
 
-    func testMismatchedOrEmptyValuesAreRejected() {
-        XCTAssertNil(GoogleCalendarConfiguration(
-            clientID: "1234-abc.apps.googleusercontent.com",
-            reversedClientID: "com.googleusercontent.apps.other"
-        ))
-        XCTAssertNil(GoogleCalendarConfiguration(clientID: "", reversedClientID: ""))
-        XCTAssertNil(GoogleCalendarConfiguration(
-            clientID: "unconfigured",
-            reversedClientID: "com.googleusercontent.apps.unconfigured"
-        ))
+    func testEmptyOrNonGoogleClientIDsAreRejected() {
+        XCTAssertNil(GoogleCalendarConfiguration(clientID: "", clientSecret: nil))
+        XCTAssertNil(GoogleCalendarConfiguration(clientID: "unconfigured", clientSecret: nil))
+        XCTAssertNil(GoogleCalendarConfiguration(clientID: ".apps.googleusercontent.com", clientSecret: nil))
     }
 
     func testPKCEChallengeMatchesRFC7636Example() {
